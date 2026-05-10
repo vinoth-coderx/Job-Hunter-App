@@ -3,9 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/models/subscription_model.dart';
+import '../../data/services/subscription_service.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/coins_provider.dart';
 import 'payment_screen.dart';
 
 /// All copy on this screen — names, prices, durations, features, current
@@ -107,6 +110,71 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       ok ? AppColors.success : AppColors.urgent,
     );
     if (ok) Navigator.pop(context);
+  }
+
+  Future<void> _confirmCoinRedeem(SubscriptionPlanInfo plan) async {
+    final cost = plan.coinCost;
+    if (cost == null) return;
+    final balance = context.read<CoinsProvider>().balance;
+    if (balance < cost) {
+      _toast(
+        'You need $cost coins · short by ${cost - balance}',
+        AppColors.urgent,
+      );
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Use coins for this plan?'),
+        content: Text(
+          'Spend $cost coins to activate ${plan.name}. '
+          "You'll have ${balance - cost} coins left.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            child: Text('Use $cost coins'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || ok != true) return;
+
+    setState(() => _busy = true);
+    try {
+      final result =
+          await SubscriptionService().redeemWithCoins(plan.tier);
+      if (!mounted) return;
+      context.read<CoinsProvider>().setBalance(result.coinsBalance);
+      // Reload the auth provider's subscription state so the "Current"
+      // badge moves to the new tier immediately.
+      await context.read<AuthProvider>().loadCurrentSubscription();
+      if (!mounted) return;
+      _toast('${plan.name} activated · -${result.coinsSpent} coins',
+          AppColors.success);
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      _toast(
+        e.toString().replaceAll('Exception: ', ''),
+        AppColors.urgent,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _doCancel({bool confirmFirst = false}) async {
@@ -233,8 +301,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                                       isSelected: _selected == p.tier,
                                       isCurrent: state.tier == p.tier,
                                       tag: _tagFor(p, plans),
+                                      coinsBalance: context
+                                          .watch<CoinsProvider>()
+                                          .balance,
                                       onTap: () =>
                                           setState(() => _selected = p.tier),
+                                      onRedeemCoins: p.coinCost != null
+                                          ? () => _confirmCoinRedeem(p)
+                                          : null,
                                     ),
                                     const SizedBox(height: 12),
                                   ],
@@ -504,13 +578,20 @@ class _PlanTile extends StatelessWidget {
   final bool isCurrent;
   final String? tag;
   final VoidCallback onTap;
+  // Read-only view of the seeker's current coin balance — drives whether
+  // the "pay with coins" CTA shows enabled or muted.
+  final int coinsBalance;
+  // null when the plan can't be redeemed for coins (free / yearly).
+  final VoidCallback? onRedeemCoins;
 
   const _PlanTile({
     required this.plan,
     required this.isSelected,
     required this.isCurrent,
     required this.onTap,
+    required this.coinsBalance,
     this.tag,
+    this.onRedeemCoins,
   });
 
   @override
@@ -631,6 +712,14 @@ class _PlanTile extends StatelessWidget {
                     ],
                   ),
                 ),
+              ),
+            ],
+            if (plan.coinCost != null && onRedeemCoins != null && !isCurrent) ...[
+              const SizedBox(height: 14),
+              _CoinAltCta(
+                cost: plan.coinCost!,
+                balance: coinsBalance,
+                onTap: onRedeemCoins!,
               ),
             ],
           ],
@@ -866,6 +955,95 @@ class _LoadError extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CoinAltCta extends StatelessWidget {
+  final int cost;
+  final int balance;
+  final VoidCallback onTap;
+
+  const _CoinAltCta({
+    required this.cost,
+    required this.balance,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final affordable = balance >= cost;
+    return InkWell(
+      onTap: affordable ? onTap : null,
+      borderRadius: BorderRadius.circular(AppRadius.input),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: affordable
+              ? const Color(0xFFFEF3C7)
+              : context.scaffoldBg,
+          borderRadius: BorderRadius.circular(AppRadius.input),
+          border: Border.all(
+            color: affordable
+                ? const Color(0xFFF59E0B)
+                : context.cardBorder,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.monetization_on_rounded,
+              size: 18,
+              color: affordable
+                  ? const Color(0xFFD97706)
+                  : context.textTertiary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: RichText(
+                text: TextSpan(
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: context.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: affordable
+                          ? 'Use $cost coins instead'
+                          : 'Pay with coins',
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: affordable
+                            ? const Color(0xFF92400E)
+                            : context.textSecondary,
+                      ),
+                    ),
+                    TextSpan(
+                      text: affordable
+                          ? '  ·  Balance: $balance'
+                          : '  ·  Need $cost, have $balance',
+                      style: AppTextStyles.labelSmall.copyWith(
+                        color: affordable
+                            ? const Color(0xFF92400E).withValues(alpha: 0.75)
+                            : context.textTertiary,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_rounded,
+              size: 16,
+              color: affordable
+                  ? const Color(0xFFD97706)
+                  : context.textTertiary,
             ),
           ],
         ),

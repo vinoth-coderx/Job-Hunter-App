@@ -84,9 +84,20 @@ class JobProvider extends ChangeNotifier {
   int get interviewCount =>
       _applications.where((a) => a.status == ApplicationStatus.interview).length;
 
+  /// Read-time view of `_jobs` with applied rows stripped. Auto-Apply
+  /// runs server-side and can silently land applications while the app
+  /// is open, so the load-time `_stripApplied` snapshot goes stale.
+  /// Re-filtering at read keeps every discovery surface (matchedJobs /
+  /// topMatches / handPickedForYou / city / nearby / recentlyPosted)
+  /// self-healing — once `_applications` refreshes (loadJobs, resume,
+  /// refreshApplications), the next render hides the just-applied row
+  /// without needing a feed reload.
+  List<Job> get _visibleJobs => _stripApplied(_jobs);
+
   List<Job> get matchedJobs {
-    if (_selectedCategory == 'All') return _jobs;
-    return _jobs.where((j) => j.category == _selectedCategory).toList();
+    final base = _visibleJobs;
+    if (_selectedCategory == 'All') return base;
+    return base.where((j) => j.category == _selectedCategory).toList();
   }
 
   /// Top match-scored jobs from the already-loaded feed. Backend returns
@@ -95,7 +106,7 @@ class JobProvider extends ChangeNotifier {
   /// profile-incomplete fallback both surface `score: null`), so the home
   /// section can hide cleanly instead of showing un-scored "matches".
   List<Job> topMatches({int limit = 5}) {
-    return _jobs.where((j) => j.matchScore != null).take(limit).toList();
+    return _visibleJobs.where((j) => j.matchScore != null).take(limit).toList();
   }
 
   /// Curated "Hand-picked for you" feed that replaces the old separate
@@ -126,7 +137,7 @@ class JobProvider extends ChangeNotifier {
       return 3;
     }
 
-    final scored = _jobs
+    final scored = _visibleJobs
         .where((j) => j.matchScore != null && j.matchScore! >= 30)
         .toList();
     if (scored.isEmpty) return const [];
@@ -175,7 +186,7 @@ class JobProvider extends ChangeNotifier {
     final needle = city.trim().toLowerCase();
     if (needle.isEmpty) return const [];
     final out = <Job>[];
-    for (final j in _jobs) {
+    for (final j in _visibleJobs) {
       if (j.location.toLowerCase().contains(needle)) {
         out.add(j);
         if (out.length >= limit) break;
@@ -195,7 +206,7 @@ class JobProvider extends ChangeNotifier {
   /// Most recently posted jobs from the already-loaded feed, sorted by
   /// `postedAt` desc. Jobs without a parseable date sink to the end.
   List<Job> recentlyPosted({int limit = 8}) {
-    final list = List<Job>.from(_jobs);
+    final list = List<Job>.from(_visibleJobs);
     list.sort((a, b) {
       final ad = a.postedAt;
       final bd = b.postedAt;
@@ -544,11 +555,23 @@ class JobProvider extends ChangeNotifier {
   /// Full saved jobs list (with details) for the saved jobs screen.
   Future<List<Job>> fetchSavedJobs() => _jobService.fetchSavedJobs();
 
+  // Coin-grant snapshot from the most recent apply / quick-apply. Read
+  // by the screen that triggered the apply so it can push the balance
+  // into CoinsProvider — provider doesn't have a BuildContext, so the
+  // UI mediates the cross-provider write.
+  int? _lastApplyCoinsBalance;
+  int? _lastApplyCoinsAwarded;
+  int? get lastApplyCoinsBalance => _lastApplyCoinsBalance;
+  int? get lastApplyCoinsAwarded => _lastApplyCoinsAwarded;
+
   Future<bool> applyToJob(Job job, {String? notes}) async {
     if (hasApplied(job.id)) return false;
     try {
-      final created = await _appliedService.apply(jobId: job.id, notes: notes);
-      _applications = [created, ..._applications];
+      final result =
+          await _appliedService.apply(jobId: job.id, notes: notes);
+      _applications = [result.application, ..._applications];
+      _lastApplyCoinsBalance = result.coinsBalance;
+      _lastApplyCoinsAwarded = result.coinsAwarded;
       _removeFromDiscoveryFeeds(job.id);
       notifyListeners();
       return true;
@@ -566,12 +589,14 @@ class JobProvider extends ChangeNotifier {
   }) async {
     if (hasApplied(job.id)) return false;
     try {
-      final created = await _appliedService.quickApply(
+      final result = await _appliedService.quickApply(
         jobId: job.id,
         quickNote: quickNote,
         screeningAnswers: screeningAnswers,
       );
-      _applications = [created, ..._applications];
+      _applications = [result.application, ..._applications];
+      _lastApplyCoinsBalance = result.coinsBalance;
+      _lastApplyCoinsAwarded = result.coinsAwarded;
       _removeFromDiscoveryFeeds(job.id);
       notifyListeners();
       return true;

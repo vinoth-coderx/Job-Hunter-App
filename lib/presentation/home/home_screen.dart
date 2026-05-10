@@ -7,11 +7,13 @@ import '../../data/models/job_model.dart';
 import '../../data/services/push_service.dart';
 import '../../providers/alert_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/coins_provider.dart';
 import '../../providers/job_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../widgets/animated_list_item.dart';
 import '../widgets/app_avatar.dart';
+import '../widgets/coin_pill.dart';
 import '../widgets/compact_job_card.dart';
 import '../widgets/custom_search_bar.dart';
 import '../widgets/header_action_button.dart';
@@ -60,6 +62,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         context.read<ChatProvider>()
           ..start()
           ..loadConversations();
+        // Coin balance for the header pill. Best-effort — the pill
+        // falls back to whatever value the provider last cached.
+        context.read<CoinsProvider>().refresh();
         PushService.init();
       }
     });
@@ -81,6 +86,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed && mounted) {
       final isGuest = context.read<AuthProvider>().isGuest;
       context.read<JobProvider>().maybeAutoRefresh(asGuest: isGuest);
+      if (!isGuest) {
+        // Pick up any coins earned while we were backgrounded
+        // (server-side grants from cron, referrals, etc.).
+        context.read<CoinsProvider>().refresh();
+      }
     }
   }
 
@@ -266,6 +276,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ],
                     ),
                   ),
+                  // Coin balance pill — gold gradient so it reads as a
+                  // wallet at-a-glance, not just another secondary icon.
+                  // Guests don't have a balance to show.
+                  if (!isGuest) ...[
+                    const CoinPill(),
+                    const SizedBox(width: 8),
+                  ],
                   // Messages icon — primary entry point for chat now that
                   // it's been removed from the bottom-nav. Sits left of
                   // the bell so the urgent-coloured badges don't stack.

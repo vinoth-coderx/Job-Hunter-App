@@ -27,15 +27,21 @@ class CheckInResult {
   final int streakCount;
   final int longestStreak;
   final bool streakChanged;
+  final int coinsAwarded;
+  final int coinsBalance;
   const CheckInResult({
     required this.streakCount,
     required this.longestStreak,
     required this.streakChanged,
+    required this.coinsAwarded,
+    required this.coinsBalance,
   });
   factory CheckInResult.fromJson(Map<String, dynamic> j) => CheckInResult(
         streakCount: (j['streakCount'] as num?)?.toInt() ?? 0,
         longestStreak: (j['longestStreak'] as num?)?.toInt() ?? 0,
         streakChanged: j['streakChanged'] as bool? ?? false,
+        coinsAwarded: (j['coinsAwarded'] as num?)?.toInt() ?? 0,
+        coinsBalance: (j['coinsBalance'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -65,20 +71,33 @@ class BadgesSnapshot {
   final int total;
   final int unlocked;
   final List<ServerBadge> badges;
+  // Profile completeness 0-100, computed server-side via the same scorer
+  // that gates the +50 profile-completion coin bonus. Surfaced here so
+  // the coins / achievements screens can render a single progress bar
+  // without a second round-trip.
+  final int completion;
   const BadgesSnapshot({
     required this.total,
     required this.unlocked,
     required this.badges,
+    required this.completion,
   });
-  factory BadgesSnapshot.fromJson(Map<String, dynamic> j) => BadgesSnapshot(
-        total: (j['total'] as num?)?.toInt() ?? 0,
-        unlocked: (j['unlocked'] as num?)?.toInt() ?? 0,
-        badges: (j['badges'] as List?)
-                ?.whereType<Map<String, dynamic>>()
-                .map(ServerBadge.fromJson)
-                .toList() ??
-            const [],
-      );
+  factory BadgesSnapshot.fromJson(Map<String, dynamic> j) {
+    final stats = j['stats'];
+    final completion = stats is Map<String, dynamic>
+        ? ((stats['completion'] as num?)?.toInt() ?? 0)
+        : 0;
+    return BadgesSnapshot(
+      total: (j['total'] as num?)?.toInt() ?? 0,
+      unlocked: (j['unlocked'] as num?)?.toInt() ?? 0,
+      badges: (j['badges'] as List?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(ServerBadge.fromJson)
+              .toList() ??
+          const [],
+      completion: completion,
+    );
+  }
 }
 
 class GamificationService {
@@ -99,5 +118,11 @@ class GamificationService {
   Future<BadgesSnapshot> badges() async {
     final raw = await _api.get('seeker/badges');
     return BadgesSnapshot.fromJson(ApiClient.unwrapMap(raw));
+  }
+
+  Future<int> getCoinsBalance() async {
+    final raw = await _api.get('seeker/coins');
+    final map = ApiClient.unwrapMap(raw);
+    return (map['balance'] as num?)?.toInt() ?? 0;
   }
 }

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/applicant_model.dart';
 import '../../providers/applicants_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -22,7 +23,8 @@ class ApplicantDetailScreen extends StatefulWidget {
   State<ApplicantDetailScreen> createState() => _ApplicantDetailScreenState();
 }
 
-class _ApplicantDetailScreenState extends State<ApplicantDetailScreen> {
+class _ApplicantDetailScreenState extends State<ApplicantDetailScreen>
+    with TapGuardMixin<ApplicantDetailScreen> {
   Applicant? _applicant;
   bool _loading = true;
   String? _error;
@@ -165,20 +167,27 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen> {
               SecondaryButton(
                 label: 'Open resume',
                 icon: Icons.description_outlined,
-                onPressed: () async {
-                  final uri = Uri.tryParse(s.resumeUrl!);
-                  if (uri != null) {
-                    await launchUrl(uri,
-                        mode: LaunchMode.externalApplication);
-                  }
-                },
+                onPressed: isBusy('resume')
+                    ? null
+                    : () => guard(
+                          () async {
+                            final uri = Uri.tryParse(s.resumeUrl!);
+                            if (uri != null) {
+                              await launchUrl(uri,
+                                  mode: LaunchMode.externalApplication);
+                            }
+                          },
+                          key: 'resume',
+                        ),
               ),
             if (s != null) ...[
               const SizedBox(height: 8),
               SecondaryButton(
                 label: 'Message in app',
                 icon: Icons.chat_bubble_outline,
-                onPressed: () => _openChat(s.id, a),
+                onPressed: isBusy('chat')
+                    ? null
+                    : () => guard(() => _openChat(s.id, a), key: 'chat'),
               ),
             ],
             // Hirer-only: schedule interview. Available once the applicant
@@ -188,29 +197,39 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen> {
             SecondaryButton(
               label: 'Schedule interview',
               icon: Icons.event_outlined,
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                final iv = await ScheduleInterviewSheet.show(
-                    context, a.applicationId);
-                if (!mounted) return;
-                if (iv != null) {
-                  messenger.showSnackBar(const SnackBar(
-                    content: Text('Interview invite sent'),
-                    behavior: SnackBarBehavior.floating,
-                  ));
-                  await _load();
-                }
-              },
+              onPressed: isBusy('schedule')
+                  ? null
+                  : () => guard(
+                        () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          final iv = await ScheduleInterviewSheet.show(
+                              context, a.applicationId);
+                          if (!mounted) return;
+                          if (iv != null) {
+                            messenger.showSnackBar(const SnackBar(
+                              content: Text('Interview invite sent'),
+                              behavior: SnackBarBehavior.floating,
+                            ));
+                            await _load();
+                          }
+                        },
+                        key: 'schedule',
+                      ),
             ),
             if (s?.email != null) ...[
               const SizedBox(height: 8),
               SecondaryButton(
                 label: 'Email applicant',
                 icon: Icons.mail_outline,
-                onPressed: () async {
-                  final uri = Uri(scheme: 'mailto', path: s!.email);
-                  await launchUrl(uri);
-                },
+                onPressed: isBusy('email')
+                    ? null
+                    : () => guard(
+                          () async {
+                            final uri = Uri(scheme: 'mailto', path: s!.email);
+                            await launchUrl(uri);
+                          },
+                          key: 'email',
+                        ),
               ),
             ],
             if (s?.phone != null && s!.phone!.isNotEmpty) ...[
@@ -218,10 +237,15 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen> {
               SecondaryButton(
                 label: 'Call ${s.phone}',
                 icon: Icons.phone,
-                onPressed: () async {
-                  final uri = Uri(scheme: 'tel', path: s.phone);
-                  await launchUrl(uri);
-                },
+                onPressed: isBusy('call')
+                    ? null
+                    : () => guard(
+                          () async {
+                            final uri = Uri(scheme: 'tel', path: s.phone);
+                            await launchUrl(uri);
+                          },
+                          key: 'call',
+                        ),
               ),
             ],
           ],
@@ -480,11 +504,17 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen> {
                     child: SecondaryButton(
                       label: 'Reject',
                       icon: Icons.close,
-                      onPressed: () async {
-                        final reason = await _askRejectionReason();
-                        if (reason == null) return;
-                        await _setStatus('rejected', rejectionReason: reason);
-                      },
+                      onPressed: isBusy('status')
+                          ? null
+                          : () => guard(
+                                () async {
+                                  final reason = await _askRejectionReason();
+                                  if (reason == null) return;
+                                  await _setStatus('rejected',
+                                      rejectionReason: reason);
+                                },
+                                key: 'status',
+                              ),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -494,14 +524,20 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen> {
                       label: a.status == 'shortlisted'
                           ? 'Move to interview'
                           : 'Shortlist',
+                      isLoading: isBusy('status'),
                       icon: Icons.check,
-                      onPressed: () async {
-                        if (a.status == 'shortlisted') {
-                          await _setStatus('interview');
-                        } else {
-                          await _setStatus('shortlisted');
-                        }
-                      },
+                      onPressed: isBusy('status')
+                          ? null
+                          : () => guard(
+                                () async {
+                                  if (a.status == 'shortlisted') {
+                                    await _setStatus('interview');
+                                  } else {
+                                    await _setStatus('shortlisted');
+                                  }
+                                },
+                                key: 'status',
+                              ),
                     ),
                   ),
                 ],

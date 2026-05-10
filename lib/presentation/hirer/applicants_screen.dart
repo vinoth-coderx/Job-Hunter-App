@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/applicant_model.dart';
 import '../../providers/applicants_provider.dart';
 import '../widgets/app_avatar.dart';
@@ -20,7 +21,8 @@ class ApplicantsScreen extends StatefulWidget {
   State<ApplicantsScreen> createState() => _ApplicantsScreenState();
 }
 
-class _ApplicantsScreenState extends State<ApplicantsScreen> {
+class _ApplicantsScreenState extends State<ApplicantsScreen>
+    with TapGuardMixin<ApplicantsScreen> {
   static const _statusFilters = [
     'all',
     'applied',
@@ -129,14 +131,17 @@ class _ApplicantsScreenState extends State<ApplicantsScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (_, i) => _ApplicantCard(
                       applicant: prov.items[i],
-                      onTap: () async {
-                        await Navigator.of(context).push(MaterialPageRoute(
-                          builder: (_) => ApplicantDetailScreen(
-                              applicationId: prov.items[i].applicationId),
-                        ));
-                        // Re-fetch in case status changed in the detail view.
-                        if (mounted) _refresh();
-                      },
+                      onTap: () => guard(
+                        () async {
+                          await Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => ApplicantDetailScreen(
+                                applicationId: prov.items[i].applicationId),
+                          ));
+                          // Re-fetch in case status changed in the detail view.
+                          if (mounted) _refresh();
+                        },
+                        key: 'open-${prov.items[i].applicationId}',
+                      ),
                     ),
                   ),
                 );

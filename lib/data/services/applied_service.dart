@@ -2,11 +2,38 @@ import '../models/application_model.dart';
 import '../models/job_model.dart';
 import 'api_client.dart';
 
+/// Wraps the response from an apply call so callers can sync the seeker's
+/// coin wallet from the same round-trip. `coinsAwarded` is 0 when the
+/// daily cap (or duplicate idempotency key) suppressed the grant —
+/// `coinsBalance` is still the authoritative current balance.
+class ApplyResult {
+  final JobApplication application;
+  final int coinsAwarded;
+  final int coinsBalance;
+  const ApplyResult({
+    required this.application,
+    required this.coinsAwarded,
+    required this.coinsBalance,
+  });
+}
+
 /// Application tracker endpoints under `/api/v1/applied`.
 class AppliedService {
   final ApiClient _api = ApiClient.instance;
 
-  Future<JobApplication> apply({
+  ApplyResult _toApplyResult(dynamic raw) {
+    final root = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
+    final data = root['data'] is Map<String, dynamic>
+        ? root['data'] as Map<String, dynamic>
+        : ApiClient.unwrapMap(raw);
+    return ApplyResult(
+      application: JobApplication.fromApiJson(data),
+      coinsAwarded: (root['coinsAwarded'] as num?)?.toInt() ?? 0,
+      coinsBalance: (root['coinsBalance'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Future<ApplyResult> apply({
     required String jobId,
     String? notes,
   }) async {
@@ -14,14 +41,13 @@ class AppliedService {
       'jobId': jobId,
       if (notes != null && notes.isNotEmpty) 'notes': notes,
     });
-    final data = ApiClient.unwrapMap(raw);
-    return JobApplication.fromApiJson(data);
+    return _toApplyResult(raw);
   }
 
   /// Native one-click apply for in-app job postings.
   /// Differs from [apply] by requiring a resume on the seeker profile +
   /// answering any required screening questions on the job.
-  Future<JobApplication> quickApply({
+  Future<ApplyResult> quickApply({
     required String jobId,
     String? quickNote,
     List<({String question, String answer})>? screeningAnswers,
@@ -34,8 +60,7 @@ class AppliedService {
             .map((a) => {'question': a.question, 'answer': a.answer})
             .toList(),
     });
-    final data = ApiClient.unwrapMap(raw);
-    return JobApplication.fromApiJson(data);
+    return _toApplyResult(raw);
   }
 
   Future<List<JobApplication>> list({

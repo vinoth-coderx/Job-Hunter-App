@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/interview_model.dart';
 import '../../data/services/interview_service.dart';
 import '../../providers/auth_provider.dart';
@@ -101,7 +102,7 @@ class _MyInterviewsScreenState extends State<MyInterviewsScreen> {
       );
 }
 
-class _InterviewCard extends StatelessWidget {
+class _InterviewCard extends StatefulWidget {
   final Interview interview;
   final bool isHirer;
   final VoidCallback onChanged;
@@ -110,6 +111,15 @@ class _InterviewCard extends StatelessWidget {
     required this.isHirer,
     required this.onChanged,
   });
+
+  @override
+  State<_InterviewCard> createState() => _InterviewCardState();
+}
+
+class _InterviewCardState extends State<_InterviewCard>
+    with TapGuardMixin<_InterviewCard> {
+  Interview get interview => widget.interview;
+  bool get isHirer => widget.isHirer;
 
   Color _statusColor(BuildContext context) {
     switch (interview.status) {
@@ -210,13 +220,19 @@ class _InterviewCard extends StatelessWidget {
                   interview.meetingLink!.isNotEmpty)
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () async {
-                      final uri = Uri.tryParse(interview.meetingLink!);
-                      if (uri != null) {
-                        await launchUrl(uri,
-                            mode: LaunchMode.externalApplication);
-                      }
-                    },
+                    onPressed: isBusy('join')
+                        ? null
+                        : () => guard(
+                              () async {
+                                final uri =
+                                    Uri.tryParse(interview.meetingLink!);
+                                if (uri != null) {
+                                  await launchUrl(uri,
+                                      mode: LaunchMode.externalApplication);
+                                }
+                              },
+                              key: 'join',
+                            ),
                     icon: const Icon(Icons.video_call, size: 18),
                     label: const Text('Join'),
                   ),
@@ -227,13 +243,25 @@ class _InterviewCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: () async {
-                      try {
-                        await InterviewService.instance.confirm(interview.id);
-                        onChanged();
-                      } catch (_) {}
-                    },
-                    icon: const Icon(Icons.check, size: 18),
+                    onPressed: isBusy('confirm')
+                        ? null
+                        : () => guard(
+                              () async {
+                                try {
+                                  await InterviewService.instance
+                                      .confirm(interview.id);
+                                  widget.onChanged();
+                                } catch (_) {}
+                              },
+                              key: 'confirm',
+                            ),
+                    icon: isBusy('confirm')
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check, size: 18),
                     label: const Text('Confirm'),
                   ),
                 ),
@@ -242,13 +270,25 @@ class _InterviewCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () async {
-                      try {
-                        await InterviewService.instance.cancel(interview.id);
-                        onChanged();
-                      } catch (_) {}
-                    },
-                    icon: const Icon(Icons.cancel_outlined, size: 18),
+                    onPressed: isBusy('cancel')
+                        ? null
+                        : () => guard(
+                              () async {
+                                try {
+                                  await InterviewService.instance
+                                      .cancel(interview.id);
+                                  widget.onChanged();
+                                } catch (_) {}
+                              },
+                              key: 'cancel',
+                            ),
+                    icon: isBusy('cancel')
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cancel_outlined, size: 18),
                     label: const Text('Cancel'),
                   ),
                 ),

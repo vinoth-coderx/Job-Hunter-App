@@ -67,6 +67,24 @@ class SubscriptionService {
     await _api.post('subscriptions/cancel');
   }
 
+  /// Activates a paid tier by spending the seeker's coin balance instead
+  /// of going through Razorpay. Server enforces a per-day idempotency key
+  /// so a double-tap returns 409 rather than double-spending.
+  Future<RedeemWithCoinsResult> redeemWithCoins(SubscriptionPlan tier) async {
+    final raw = await _api.post('subscriptions/redeem-with-coins', body: {
+      'tier': tier.id,
+    });
+    final root = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
+    final data = root['data'] is Map<String, dynamic>
+        ? root['data'] as Map<String, dynamic>
+        : ApiClient.unwrapMap(raw);
+    return RedeemWithCoinsResult(
+      record: SubscriptionRecord.fromJson(data),
+      coinsSpent: (root['coinsSpent'] as num?)?.toInt() ?? 0,
+      coinsBalance: (root['coinsBalance'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   // ---- Razorpay ----
 
   /// Ask the server to create a Razorpay order pinned to a tier. The
@@ -99,6 +117,17 @@ class SubscriptionService {
     });
     return SubscriptionRecord.fromJson(ApiClient.unwrapMap(raw));
   }
+}
+
+class RedeemWithCoinsResult {
+  final SubscriptionRecord record;
+  final int coinsSpent;
+  final int coinsBalance;
+  const RedeemWithCoinsResult({
+    required this.record,
+    required this.coinsSpent,
+    required this.coinsBalance,
+  });
 }
 
 class RazorpayOrder {

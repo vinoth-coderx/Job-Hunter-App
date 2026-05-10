@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../providers/auth_provider.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/app_text.dart';
@@ -22,7 +23,8 @@ class EmailAuthScreen extends StatefulWidget {
   State<EmailAuthScreen> createState() => _EmailAuthScreenState();
 }
 
-class _EmailAuthScreenState extends State<EmailAuthScreen> {
+class _EmailAuthScreenState extends State<EmailAuthScreen>
+    with TapGuardMixin<EmailAuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
@@ -48,32 +50,38 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
   }
 
   Future<void> _submit() async {
+    if (isBusy('submit')) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    final auth = context.read<AuthProvider>();
-    setState(() => _errorMsg = null);
+    await guard(
+      () async {
+        final auth = context.read<AuthProvider>();
+        setState(() => _errorMsg = null);
 
-    final ok = _isSignUp
-        ? await auth.signUpWithEmail(
-            name: _nameCtrl.text.trim(),
-            email: _emailCtrl.text.trim(),
-            password: _passwordCtrl.text,
-          )
-        : await auth.signInWithEmail(
-            email: _emailCtrl.text.trim(),
-            password: _passwordCtrl.text,
-          );
-    if (!mounted) return;
+        final ok = _isSignUp
+            ? await auth.signUpWithEmail(
+                name: _nameCtrl.text.trim(),
+                email: _emailCtrl.text.trim(),
+                password: _passwordCtrl.text,
+              )
+            : await auth.signInWithEmail(
+                email: _emailCtrl.text.trim(),
+                password: _passwordCtrl.text,
+              );
+        if (!mounted) return;
 
-    if (ok) {
-      // Fresh sign-up → role picker (seeker/hirer choice gates the
-      // role-specific setup that follows). Returning sign-in always
-      // goes straight to /main — legacy accounts with empty profiles
-      // can fill the gaps later from the profile screen.
-      final dest = _isSignUp ? AppRoutes.rolePicker : AppRoutes.main;
-      Navigator.pushNamedAndRemoveUntil(context, dest, (_) => false);
-    } else {
-      setState(() => _errorMsg = auth.error ?? 'Authentication failed');
-    }
+        if (ok) {
+          // Fresh sign-up → role picker (seeker/hirer choice gates the
+          // role-specific setup that follows). Returning sign-in always
+          // goes straight to /main — legacy accounts with empty profiles
+          // can fill the gaps later from the profile screen.
+          final dest = _isSignUp ? AppRoutes.rolePicker : AppRoutes.main;
+          Navigator.pushNamedAndRemoveUntil(context, dest, (_) => false);
+        } else {
+          setState(() => _errorMsg = auth.error ?? 'Authentication failed');
+        }
+      },
+      key: 'submit',
+    );
   }
 
   void _setMode({required bool signUp}) {
@@ -272,10 +280,13 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
                             child: TextButton(
                               onPressed: loading
                                   ? null
-                                  : () => Navigator.pushNamed(
-                                        context,
-                                        AppRoutes.forgotPassword,
-                                        arguments: _emailCtrl.text.trim(),
+                                  : () => debounceTap(
+                                        () => Navigator.pushNamed(
+                                          context,
+                                          AppRoutes.forgotPassword,
+                                          arguments: _emailCtrl.text.trim(),
+                                        ),
+                                        key: 'forgot',
                                       ),
                               style: TextButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(

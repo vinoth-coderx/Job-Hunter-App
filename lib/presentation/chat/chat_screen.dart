@@ -60,6 +60,10 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final prov = context.read<ChatProvider>()..start();
+      // Suppress the foreground heads-up banner for messages that land
+      // in this thread while it's on screen — they're already visible
+      // in the message list. Cleared in dispose().
+      prov.setActiveConversationId(widget.conversationId);
       await prov.loadMessages(widget.conversationId);
       await prov.markConversationRead(widget.conversationId);
       if (!mounted) return;
@@ -260,6 +264,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _typingDebounce?.cancel();
     _input.dispose();
     _scroll.dispose();
+    // Re-arm the foreground banner for this thread once the user
+    // leaves — guarded read so we don't crash on a pre-disposed tree.
+    try {
+      context.read<ChatProvider>().setActiveConversationId(null);
+    } catch (_) {}
     super.dispose();
   }
 

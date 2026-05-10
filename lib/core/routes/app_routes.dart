@@ -10,7 +10,6 @@ class AppRoutes {
   static const String main = '/main';
   static const String search = '/search';
   static const String jobDetail = '/job-detail';
-  static const String profileEdit = '/profile-edit';
   static const String profileInformation = '/profile-information';
   static const String resumeProfile = '/resume-profile';
   static const String editField = '/edit-field';
@@ -27,7 +26,6 @@ class AppRoutes {
   static const String hirerTeam = '/hirer-team';
   static const String savedJobs = '/saved-jobs';
   static const String autoApply = '/auto-apply';
-  static const String autoApplyReview = '/auto-apply-review';
   static const String autoApplyLog = '/auto-apply-log';
   static const String conversations = '/conversations';
   static const String chat = '/chat';
@@ -40,6 +38,7 @@ class AppRoutes {
   static const String assessmentResult = '/assessment-result';
   static const String mockInterview = '/mock-interview';
   static const String badges = '/badges';
+  static const String coins = '/coins';
   static const String hirerAnalytics = '/hirer-analytics';
   static const String notifications = '/notifications';
   static const String notificationPrefs = '/notification-prefs';

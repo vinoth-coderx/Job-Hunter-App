@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/coins_provider.dart';
 import '../widgets/app_avatar.dart';
 import '../widgets/app_text.dart';
 
@@ -83,6 +84,10 @@ class _ProfileInformationScreenState extends State<ProfileInformationScreen> {
     if (!mounted) return;
     setState(() => _saving = false);
     if (ok) {
+      // The 100%-completion bonus may have just landed — re-fetch the
+      // header pill so a returning seeker sees the +50 coins immediately.
+      // Cheap (single GET) and only fires on success.
+      context.read<CoinsProvider>().refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Profile updated'),

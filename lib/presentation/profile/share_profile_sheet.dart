@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/user_model.dart';
 
 Future<void> showShareProfileSheet(BuildContext context, UserModel user) {
@@ -13,9 +14,17 @@ Future<void> showShareProfileSheet(BuildContext context, UserModel user) {
   );
 }
 
-class _ShareProfileSheet extends StatelessWidget {
+class _ShareProfileSheet extends StatefulWidget {
   final UserModel user;
   const _ShareProfileSheet({required this.user});
+
+  @override
+  State<_ShareProfileSheet> createState() => _ShareProfileSheetState();
+}
+
+class _ShareProfileSheetState extends State<_ShareProfileSheet>
+    with TapGuardMixin<_ShareProfileSheet> {
+  UserModel get user => widget.user;
 
   String get _profileLink =>
       'https://jobhunder.app/u/${user.id.substring(0, user.id.length.clamp(0, 8))}';
@@ -120,17 +129,20 @@ class _ShareProfileSheet extends StatelessWidget {
                   ),
                 ),
                 TextButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(
-                        ClipboardData(text: _profileLink));
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Profile link copied'),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  },
+                  onPressed: () => debounceTap(
+                    () async {
+                      await Clipboard.setData(
+                          ClipboardData(text: _profileLink));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Profile link copied'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    key: 'copy',
+                  ),
                   icon: const Icon(Icons.copy_rounded, size: 16),
                   label: const Text('Copy'),
                   style: TextButton.styleFrom(
@@ -149,31 +161,37 @@ class _ShareProfileSheet extends StatelessWidget {
                 icon: Icons.message_rounded,
                 label: 'Message',
                 color: const Color(0xFF22C55E),
-                onTap: () => _stub(context, 'Messages'),
+                onTap: () =>
+                    debounceTap(() => _stub(context, 'Messages'), key: 'share'),
               ),
               _ShareTarget(
                 icon: Icons.mail_outline_rounded,
                 label: 'Email',
                 color: const Color(0xFFEF4444),
-                onTap: () => _stub(context, 'Email'),
+                onTap: () =>
+                    debounceTap(() => _stub(context, 'Email'), key: 'share'),
               ),
               _ShareTarget(
                 icon: Icons.send_rounded,
                 label: 'Telegram',
                 color: const Color(0xFF0088CC),
-                onTap: () => _stub(context, 'Telegram'),
+                onTap: () =>
+                    debounceTap(() => _stub(context, 'Telegram'), key: 'share'),
               ),
               _ShareTarget(
                 icon: Icons.alternate_email_rounded,
                 label: 'Twitter',
                 color: const Color(0xFF1DA1F2),
-                onTap: () => _stub(context, 'Twitter'),
+                onTap: () =>
+                    debounceTap(() => _stub(context, 'Twitter'), key: 'share'),
               ),
               _ShareTarget(
                 icon: Icons.more_horiz_rounded,
                 label: 'More',
                 color: context.textSecondary,
-                onTap: () => _stub(context, 'System share'),
+                onTap: () => debounceTap(
+                    () => _stub(context, 'System share'),
+                    key: 'share'),
               ),
             ],
           ),
@@ -182,7 +200,8 @@ class _ShareProfileSheet extends StatelessWidget {
             width: double.infinity,
             height: 50,
             child: ElevatedButton.icon(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () =>
+                  debounceTap(() => Navigator.pop(context), key: 'close'),
               icon: const Icon(Icons.qr_code_rounded, size: 20),
               label: const Text('Show QR Code'),
               style: ElevatedButton.styleFrom(

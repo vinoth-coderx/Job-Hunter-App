@@ -27,7 +27,21 @@ class ApiClient {
   static final ApiClient instance = ApiClient._internal();
 
   final http.Client _http = http.Client();
-  Future<bool>? _refreshing;
+
+  /// Fired the first time an authenticated request comes back 401 — the
+  /// token is either expired, revoked, or otherwise unusable. Wired in
+  /// main.dart to wipe local auth state and bounce the user to the login
+  /// screen so a stale session can't sit on a privileged screen.
+  ///
+  /// One-shot per session: when many in-flight requests race and all 401
+  /// at once, only the first triggers the redirect. Reset the latch via
+  /// [resetUnauthorizedFlag] after a fresh successful sign-in.
+  void Function()? onUnauthorized;
+  bool _unauthorizedFired = false;
+
+  void resetUnauthorizedFlag() {
+    _unauthorizedFired = false;
+  }
 
   String get baseUrl => _rewriteForPlatform(AppConstants.apiBaseUrl);
 
@@ -220,53 +234,23 @@ class ApiClient {
   Future<http.Response> _runWithAuth(_Sender sender,
       {required bool auth}) async {
     final token = auth ? (StorageService.getAccessToken() ?? '') : '';
-    var res = await sender(token);
+    final res = await sender(token);
     if (auth && res.statusCode == 401) {
-      final refreshed = await _tryRefresh();
-      if (refreshed) {
-        final newToken = StorageService.getAccessToken() ?? '';
-        res = await sender(newToken);
-      }
+      // No refresh-token dance — token is dead, kick the user back to
+      // login immediately so they can re-authenticate. The latch in
+      // [_handleUnauthorized] keeps a burst of parallel 401s from
+      // navigating multiple times.
+      await _handleUnauthorized();
     }
     return res;
   }
 
-  Future<bool> _tryRefresh() {
-    return _refreshing ??= _doRefresh().whenComplete(() {
-      _refreshing = null;
-    });
-  }
-
-  Future<bool> _doRefresh() async {
-    final refreshToken = StorageService.getRefreshToken();
-    if (refreshToken == null || refreshToken.isEmpty) return false;
-    try {
-      final res = await _http.post(
-        _uri('auth/refresh'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode({'refreshToken': refreshToken}),
-      );
-      if (res.statusCode != 200) {
-        await StorageService.clearTokens();
-        return false;
-      }
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final payload = (data['data'] ?? data) as Map<String, dynamic>;
-      final newAccess = payload['accessToken'] as String?;
-      final newRefresh =
-          (payload['refreshToken'] as String?) ?? refreshToken;
-      if (newAccess == null) return false;
-      await StorageService.saveTokens(
-        accessToken: newAccess,
-        refreshToken: newRefresh,
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
+  Future<void> _handleUnauthorized() async {
+    if (_unauthorizedFired) return;
+    _unauthorizedFired = true;
+    await StorageService.clearTokens();
+    final cb = onUnauthorized;
+    if (cb != null) cb();
   }
 
   dynamic _decode(http.Response res) {

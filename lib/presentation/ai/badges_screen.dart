@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/app_snackbar.dart';
 import '../../data/services/gamification_service.dart';
+import '../../providers/coins_provider.dart';
 
 /// Achievements & badges screen, sourced from the backend.
 ///
@@ -66,10 +68,16 @@ class _BadgesScreenState extends State<BadgesScreen> {
     try {
       final result = await _service.checkIn();
       if (!mounted) return;
+      // Sync the header coin pill from the server-confirmed balance —
+      // avoids a follow-up GET /coins round-trip after every check-in.
+      context.read<CoinsProvider>().setBalance(result.coinsBalance);
+      final earned = result.coinsAwarded;
       AppSnackbar.success(
         context,
         result.streakChanged
-            ? 'Day ${result.streakCount} 🔥 — keep it going!'
+            ? (earned > 0
+                ? 'Day ${result.streakCount} 🔥 — +$earned coins!'
+                : 'Day ${result.streakCount} 🔥 — keep it going!')
             : 'Already checked in today.',
       );
       // Refresh badges since a streak milestone may have just unlocked.

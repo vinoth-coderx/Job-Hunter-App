@@ -12,6 +12,9 @@ class SubscriptionPlanInfo {
   final int jobMatchLimit;
   final int apiCallLimit;
   final bool prioritySupport;
+  // Server-set alternate price in coins. null when the tier can't be
+  // redeemed with coins (e.g. free, yearly).
+  final int? coinCost;
 
   const SubscriptionPlanInfo({
     required this.tier,
@@ -22,6 +25,7 @@ class SubscriptionPlanInfo {
     required this.jobMatchLimit,
     required this.apiCallLimit,
     required this.prioritySupport,
+    this.coinCost,
   });
 
   /// Convenience: paise amount used by Razorpay-style payment screens.
@@ -70,6 +74,7 @@ class SubscriptionPlanInfo {
       jobMatchLimit: (j['jobMatchLimit'] as num?)?.toInt() ?? 0,
       apiCallLimit: (j['apiCallLimit'] as num?)?.toInt() ?? 0,
       prioritySupport: (j['prioritySupport'] as bool?) ?? false,
+      coinCost: (j['coinCost'] as num?)?.toInt(),
     );
   }
 }

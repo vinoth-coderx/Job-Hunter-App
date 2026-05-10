@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/app_snackbar.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/skill_gap_model.dart';
 import '../../data/services/ai_service.dart';
+import '../../providers/auth_provider.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
 
@@ -15,11 +19,20 @@ class SkillGapScreen extends StatefulWidget {
   State<SkillGapScreen> createState() => _SkillGapScreenState();
 }
 
-class _SkillGapScreenState extends State<SkillGapScreen> {
+class _SkillGapScreenState extends State<SkillGapScreen>
+    with TapGuardMixin<SkillGapScreen> {
   final _role = TextEditingController();
   final _city = TextEditingController();
 
   Future<SkillGapResult>? _future;
+
+  // Skills the user has added to their profile this session — used to
+  // move chips from the "missing" wrap into "you already have" without
+  // waiting for a backend re-analysis.
+  final Set<String> _adoptedSkills = {};
+  // Skills currently being PATCHed — drives the per-chip spinner so the
+  // user gets immediate feedback the tap was registered.
+  final Set<String> _addingSkills = {};
 
   @override
   void dispose() {
@@ -31,17 +44,48 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
   void _go() {
     final r = _role.text.trim();
     if (r.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a target role')),
-      );
+      AppSnackbar.error(context, 'Enter a target role');
       return;
     }
     setState(() {
+      _adoptedSkills.clear();
+      _addingSkills.clear();
       _future = AiService.instance.skillGap(
         role: r,
         city: _city.text.trim().isEmpty ? null : _city.text.trim(),
       );
     });
+  }
+
+  /// Adopt a missing skill into the user's profile. Optimistic — we mark
+  /// the chip as "adopted" first, then PATCH; on failure we roll back.
+  Future<void> _adoptSkill(String skill) async {
+    final auth = context.read<AuthProvider>();
+    final user = auth.user;
+    if (user == null) return;
+    final lower = skill.toLowerCase();
+    if (_adoptedSkills.contains(lower) || _addingSkills.contains(lower)) {
+      return;
+    }
+    setState(() => _addingSkills.add(lower));
+
+    final next = <String>{
+      ...user.skills,
+      skill,
+    };
+    final ok = await auth.updateProfile(skills: next.toList());
+    if (!mounted) return;
+    setState(() {
+      _addingSkills.remove(lower);
+      if (ok) {
+        _adoptedSkills.add(lower);
+      }
+    });
+    if (ok) {
+      AppSnackbar.success(context, 'Added "$skill" to your profile');
+    } else {
+      AppSnackbar.error(context, 'Could not add this skill');
+    }
   }
 
   @override
@@ -244,18 +288,9 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        if (r.matchedSkills.isNotEmpty) ...[
-          _sectionTitle('You already have', AppColors.success),
-          const SizedBox(height: 6),
-          _skillWrap(r.matchedSkills, AppColors.success),
-          const SizedBox(height: 16),
-        ],
-        if (r.missingSkills.isNotEmpty) ...[
-          _sectionTitle('Skills you\'re missing', AppColors.urgent),
-          const SizedBox(height: 6),
-          _skillWrap(r.missingSkills, AppColors.urgent),
-          const SizedBox(height: 16),
-        ],
+        // Re-bucket missing → matched on the fly when the user adopts a
+        // chip. Avoids a round-trip to /skill-gap just to update the UI.
+        ..._buildBuckets(r),
         if (r.resources.isNotEmpty) ...[
           _sectionTitle('Suggested resources', AppColors.primary,
               trailing: r.usedAi ? 'AI' : null),
@@ -302,7 +337,37 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
         ],
       );
 
-  Widget _skillWrap(List<DemandedSkill> skills, Color color) => Wrap(
+  /// Renders the "have" + "missing" sections, accounting for any skills
+  /// the user adopted this session (which need to move from missing →
+  /// matched without waiting for a server re-analysis).
+  List<Widget> _buildBuckets(SkillGapResult r) {
+    final adopted = _adoptedSkills;
+    final stillMissing = r.missingSkills
+        .where((s) => !adopted.contains(s.skill.toLowerCase()))
+        .toList();
+    final extraMatched = r.missingSkills
+        .where((s) => adopted.contains(s.skill.toLowerCase()))
+        .toList();
+    final allMatched = [...r.matchedSkills, ...extraMatched];
+
+    return [
+      if (allMatched.isNotEmpty) ...[
+        _sectionTitle('You already have', AppColors.success),
+        const SizedBox(height: 6),
+        _matchedWrap(allMatched),
+        const SizedBox(height: 16),
+      ],
+      if (stillMissing.isNotEmpty) ...[
+        _sectionTitle('Skills you\'re missing', AppColors.urgent,
+            trailing: 'TAP TO ADD'),
+        const SizedBox(height: 6),
+        _missingWrap(stillMissing),
+        const SizedBox(height: 16),
+      ],
+    ];
+  }
+
+  Widget _matchedWrap(List<DemandedSkill> skills) => Wrap(
         spacing: 6,
         runSpacing: 6,
         children: skills
@@ -310,16 +375,21 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.10),
+                    color: AppColors.success.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: color.withValues(alpha: 0.3)),
+                    border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      const Icon(Icons.check_circle,
+                          size: 14, color: AppColors.success),
+                      const SizedBox(width: 4),
                       Text(s.skill,
                           style: AppTextStyles.bodySmall.copyWith(
-                              color: color, fontWeight: FontWeight.w600)),
+                              color: AppColors.success,
+                              fontWeight: FontWeight.w600)),
                       const SizedBox(width: 6),
                       Text('${s.demandPercent}%',
                           style: AppTextStyles.labelSmall
@@ -328,6 +398,55 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
                   ),
                 ))
             .toList(),
+      );
+
+  Widget _missingWrap(List<DemandedSkill> skills) => Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: skills.map((s) {
+          final adding = _addingSkills.contains(s.skill.toLowerCase());
+          return InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: adding ? null : () => _adoptSkill(s.skill),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.urgent.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                    color: AppColors.urgent.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (adding)
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.urgent,
+                      ),
+                    )
+                  else
+                    const Icon(Icons.add_circle_outline,
+                        size: 14, color: AppColors.urgent),
+                  const SizedBox(width: 4),
+                  Text(s.skill,
+                      style: AppTextStyles.bodySmall.copyWith(
+                          color: AppColors.urgent,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 6),
+                  Text('${s.demandPercent}%',
+                      style: AppTextStyles.labelSmall
+                          .copyWith(color: context.textTertiary)),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
       );
 
   Widget _resourceCard(SkillResource r) => Container(
@@ -364,13 +483,16 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
             if (r.url != null && r.url!.isNotEmpty)
               IconButton(
                 icon: const Icon(Icons.open_in_new),
-                onPressed: () async {
-                  final uri = Uri.tryParse(r.url!);
-                  if (uri != null) {
-                    await launchUrl(uri,
-                        mode: LaunchMode.externalApplication);
-                  }
-                },
+                onPressed: () => guard(
+                  () async {
+                    final uri = Uri.tryParse(r.url!);
+                    if (uri != null) {
+                      await launchUrl(uri,
+                          mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  key: 'open-${r.url}',
+                ),
               ),
           ],
         ),

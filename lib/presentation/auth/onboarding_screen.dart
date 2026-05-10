@@ -10,6 +10,7 @@ import '../../core/theme/app_radius.dart';
 import '../../core/utils/app_snackbar.dart';
 import '../../data/services/storage_service.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/coins_provider.dart';
 import '../../providers/resume_profile_provider.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/app_text.dart';
@@ -153,6 +154,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     setState(() => _busy = false);
 
     if (ok) {
+      // Skills/headline are heavy contributors to completeness — pull
+      // the fresh wallet so the pill catches a milestone bonus if the
+      // server granted one.
+      context.read<CoinsProvider>().refresh();
       _advance();
     } else {
       AppSnackbar.error(context, auth.error ?? 'Could not save details.');
@@ -187,6 +192,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     await auth.refreshMe();
     if (!mounted) return;
+    // Onboarding upload often pushes the seeker over the 100%
+    // completion threshold — pull the fresh balance so the home pill
+    // already reflects the +50 bonus by the time onboarding ends.
+    context.read<CoinsProvider>().refresh();
     setState(() {
       _busy = false;
       _resumeUploaded = true;

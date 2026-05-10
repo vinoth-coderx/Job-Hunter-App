@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/routes/app_routes.dart';
@@ -14,8 +13,9 @@ import '../../data/models/job_model.dart';
 import '../../data/services/api_client.dart';
 import '../../data/services/chat_service.dart';
 import '../../data/services/job_service.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/coins_provider.dart';
 import '../../providers/job_provider.dart';
-import '../widgets/category_chip.dart';
 import '../widgets/compact_job_card.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/home_section.dart';
@@ -117,10 +117,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       return;
     }
 
-    // Open the official site inside our app. The webview returns:
-    //   true  → user tapped "I've applied" → mark Applied
-    //   false → user tapped Cancel / back  → do nothing
-    final didApply = await Navigator.of(context).push<bool>(
+    // Open the official site inside our app and auto-mark applied on
+    // return. We treat the CTA tap itself as the intent-to-apply signal
+    // (same model as Indeed/LinkedIn click-tracking) and skip the
+    // post-webview "Did you apply?" sheet — it nags the user and most
+    // people answer it inconsistently anyway.
+    await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => ApplyWebviewScreen(
           url: url,
@@ -129,9 +131,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       ),
     );
     if (!mounted) return;
-    if (didApply == true) {
-      await _markApplied(jobProvider);
-    }
+    await _markApplied(jobProvider);
   }
 
   void _shareJob() {
@@ -157,6 +157,11 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     if (!mounted) return;
     setState(() => _isApplying = false);
     if (ok) {
+      // Sync the header coin pill from the server-confirmed balance.
+      final balance = jobProvider.lastApplyCoinsBalance;
+      if (balance != null) {
+        context.read<CoinsProvider>().setBalance(balance);
+      }
       _showSuccessDialog();
     } else {
       AppSnackbar.error(
@@ -348,21 +353,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _Header(job: _job),
-                              if (_job.applicationDeadline != null) ...[
-                                const SizedBox(height: 16),
-                                _DeadlineBadge(
-                                    deadline: _job.applicationDeadline!),
-                              ],
                               if (_hasStatHero) ...[
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 14),
                                 _StatHero(job: _job),
                               ],
-                              if (_job.matchScore != null) ...[
-                                const SizedBox(height: 20),
-                                _MatchSummary(job: _job),
-                              ],
                               if (_hasInfoRow) ...[
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 16),
                                 _InfoChips(job: _job),
                               ],
                               if (_job.skills.isNotEmpty) ...[
@@ -1226,34 +1222,6 @@ class _Header extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (job.isNative) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(50),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.bolt_rounded,
-                              size: 12, color: AppColors.primary),
-                          const SizedBox(width: 3),
-                          Text(
-                            'One Tap',
-                            style: AppTextStyles.labelSmall.copyWith(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 10.5,
-                              letterSpacing: 0.3,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                  ],
                   if (job.company.isNotEmpty)
                     Text(
                       job.company,
@@ -1268,17 +1236,41 @@ class _Header extends StatelessWidget {
                 ],
               ),
             ),
+            // Top-right corner badge — match score gets priority because
+            // it's the user's "should I care?" signal at-a-glance. When
+            // there's no match score we fall through to nothing here so
+            // the row doesn't reserve dead space.
+            if (job.matchScore != null) ...[
+              const SizedBox(width: 8),
+              _MatchBadge(score: job.matchScore!.round()),
+            ],
           ],
         ),
         const SizedBox(height: 16),
-        Text(
-          job.title,
-          style: AppTextStyles.h2.copyWith(
-            fontSize: 24,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-            height: 1.22,
-          ),
+        // Title row — title left, deadline pill right. Wrap so a long
+        // title pushes the pill to its own line instead of clipping.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                job.title,
+                style: AppTextStyles.h2.copyWith(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                  height: 1.22,
+                ),
+              ),
+            ),
+            if (job.applicationDeadline != null) ...[
+              const SizedBox(width: 10),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: _ClosingPill(deadline: job.applicationDeadline!),
+              ),
+            ],
+          ],
         ),
         if (hasMeta) ...[
           const SizedBox(height: 10),
@@ -1323,7 +1315,131 @@ class _Header extends StatelessWidget {
             ],
           ),
         ],
+        // Match-score reasoning appears as a subtle one-liner under the
+        // meta row so the "why" is still visible without dragging in the
+        // big match-summary card.
+        if (job.matchScore != null &&
+            job.matchReasoning != null &&
+            job.matchReasoning!.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.auto_awesome_rounded,
+                  size: 13, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  job.matchReasoning!,
+                  style: AppTextStyles.bodySmall.copyWith(
+                    fontSize: 12,
+                    color: context.textSecondary,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ],
+    );
+  }
+}
+
+/// Compact "100% match" badge for the top-right of the header. Colour
+/// follows the same fit-tier scale as the old `_MatchSummary` card so
+/// users who already learned the colour code recognise it instantly.
+class _MatchBadge extends StatelessWidget {
+  final int score;
+  const _MatchBadge({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    Color color;
+    if (score >= 90) {
+      color = AppColors.success;
+    } else if (score >= 75) {
+      color = AppColors.primary;
+    } else if (score >= 50) {
+      color = AppColors.warning;
+    } else {
+      color = context.textTertiary;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.auto_awesome_rounded, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(
+            '$score% match',
+            style: AppTextStyles.labelSmall.copyWith(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 11.5,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact pill version of the old `_DeadlineBadge`. Lives next to the
+/// title rather than as its own banner — the deadline is a useful but
+/// secondary signal (the salary + match score deserve the visual real
+/// estate the banner used to take).
+class _ClosingPill extends StatelessWidget {
+  final DateTime deadline;
+  const _ClosingPill({required this.deadline});
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    if (deadline.isBefore(now)) return const SizedBox.shrink();
+    final daysLeft = deadline.difference(now).inDays;
+    final isUrgent = daysLeft <= 3;
+    final isSoon = daysLeft <= 7;
+    final color = isUrgent
+        ? AppColors.urgent
+        : isSoon
+            ? AppColors.warning
+            : AppColors.info;
+    final label = daysLeft == 0
+        ? 'Closes today'
+        : daysLeft == 1
+            ? 'Closes tomorrow'
+            : 'Closes in ${daysLeft}d';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.timer_outlined, size: 11, color: color),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: AppTextStyles.labelSmall.copyWith(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 10.5,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1467,159 +1583,53 @@ class _ViewMoreCard extends StatelessWidget {
   }
 }
 
-class _MatchSummary extends StatelessWidget {
-  final Job job;
-  const _MatchSummary({required this.job});
-
-  @override
-  Widget build(BuildContext context) {
-    final score = job.matchScore!.round();
-    Color color;
-    if (score >= 90) {
-      color = AppColors.success;
-    } else if (score >= 75) {
-      color = AppColors.primary;
-    } else {
-      color = context.textSecondary;
-    }
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.auto_awesome_rounded, color: color, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                '$score% match for you',
-                style: AppTextStyles.bodyLarge.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          if (job.matchReasoning != null && job.matchReasoning!.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(
-              job.matchReasoning!,
-              style: AppTextStyles.bodySmall
-                  .copyWith(color: context.textSecondary, height: 1.5),
-            ),
-          ],
-          if (job.matchedSkills.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Matched skills',
-              style: AppTextStyles.labelSmall
-                  .copyWith(color: context.textSecondary),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final s in job.matchedSkills) TagChip(label: s),
-              ],
-            ),
-          ],
-          if (job.missingSkills.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Skills to grow into',
-              style: AppTextStyles.labelSmall
-                  .copyWith(color: context.textSecondary),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final s in job.missingSkills) TagChip(label: s),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
 /// Big-and-bold "salary + experience" hero so the user gets the two
 /// most important answers (How much? How senior?) at a glance.
+/// Indeed-style "key facts" row — salary + experience as inline rows
+/// rather than a big card. Each row: small icon + label on left, value
+/// in bold on the right. Reads like a structured fact sheet without
+/// fighting the title or match badge for visual weight.
 class _StatHero extends StatelessWidget {
   final Job job;
   const _StatHero({required this.job});
 
   @override
   Widget build(BuildContext context) {
-    // Each tile only renders when we actually have a value — empty
-    // salary / experience used to show "Not disclosed" / "Any level"
-    // placeholders, but those read as "we don't know anything about
-    // this job", which the seeker correctly distrusts. Hiding the
-    // tile entirely is cleaner.
     final showSalary = job.salary.isNotEmpty;
     final showExperience = job.experience.isNotEmpty;
-    final tiles = <Widget>[
-      if (showSalary)
-        _HeroStat(
-          icon: Icons.payments_rounded,
-          label: 'Salary',
-          value: job.salary,
-        ),
-      if (showExperience)
-        _HeroStat(
-          icon: Icons.workspace_premium_rounded,
-          label: 'Experience',
-          value: job.experience,
-        ),
-    ];
-    if (tiles.isEmpty) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-      decoration: BoxDecoration(
-        color: context.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: context.cardBorder),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+    if (!showSalary && !showExperience) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showSalary)
+          _FactRow(
+            icon: Icons.payments_rounded,
+            label: 'Pay',
+            value: job.salary,
           ),
-        ],
-      ),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < tiles.length; i++) ...[
-              if (i > 0)
-                Container(
-                  width: 1,
-                  margin: const EdgeInsets.symmetric(vertical: 4),
-                  color: context.divider.withValues(alpha: 0.6),
-                ),
-              Expanded(child: tiles[i]),
-            ],
-          ],
-        ),
-      ),
+        if (showSalary && showExperience)
+          Divider(
+            height: 1,
+            thickness: 1,
+            color: context.divider.withValues(alpha: 0.5),
+          ),
+        if (showExperience)
+          _FactRow(
+            icon: Icons.workspace_premium_rounded,
+            label: 'Experience',
+            value: job.experience,
+          ),
+      ],
     );
   }
 }
 
-class _HeroStat extends StatelessWidget {
+class _FactRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  const _HeroStat({
+  const _FactRow({
     required this.icon,
     required this.label,
     required this.value,
@@ -1628,9 +1638,8 @@ class _HeroStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
@@ -1643,34 +1652,30 @@ class _HeroStat extends StatelessWidget {
             alignment: Alignment.center,
             child: Icon(icon, size: 17, color: AppColors.primary),
           ),
-          const SizedBox(height: 8),
-          // Salary strings can be long ("₹50,000 – ₹1,50,000"). FittedBox
-          // shrinks the value to fit the available cell width instead of
-          // wrapping to two lines (which made the hero feel oversized).
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.center,
-            child: Text(
-              value,
-              style: AppTextStyles.h4.copyWith(
-                fontSize: 15.5,
-                fontWeight: FontWeight.w800,
-                color: context.textPrimary,
-                height: 1.15,
-                letterSpacing: -0.2,
-              ),
-              maxLines: 1,
-              softWrap: false,
-            ),
-          ),
-          const SizedBox(height: 2),
+          const SizedBox(width: 12),
+          // Label + value sit side by side instead of pushed to opposite
+          // edges. Reads "Pay  ₹2L – ₹9L" like a plain sentence — same
+          // pattern Indeed uses.
           Text(
             label,
-            style: AppTextStyles.labelSmall.copyWith(
-              color: context.textTertiary,
+            style: AppTextStyles.bodySmall.copyWith(
+              color: context.textSecondary,
               fontWeight: FontWeight.w600,
-              fontSize: 11,
-              letterSpacing: 0.3,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyles.bodyMedium.copyWith(
+                color: context.textPrimary,
+                fontWeight: FontWeight.w800,
+                fontSize: 15,
+                letterSpacing: -0.2,
+              ),
             ),
           ),
         ],
@@ -1680,24 +1685,40 @@ class _HeroStat extends StatelessWidget {
 }
 
 /// Compact secondary meta — job type, work mode, posted date — as
-/// soft pill-chips so they stay readable without competing with the hero.
+/// soft pill-chips. When the user's profile has preferences that match
+/// the job's job-type or remote-mode, those chips light up green with a
+/// check (same treatment as a matched skill) so the seeker sees "this
+/// fits how I want to work" at a glance.
 class _InfoChips extends StatelessWidget {
   final Job job;
   const _InfoChips({required this.job});
 
+  static String _norm(String s) => s.toLowerCase().trim();
+
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final user = auth.user;
+    final prefJobTypes = (user?.preferredJobTypes ?? const <String>[])
+        .map(_norm)
+        .toSet();
+    final prefRemote = (user?.preferredRemote ?? const <String>[])
+        .map(_norm)
+        .toSet();
+
     final chips = <Widget>[];
     if (job.employmentType.isNotEmpty) {
       chips.add(_InfoPill(
         icon: Icons.work_outline_rounded,
         label: _capitalize(job.employmentType),
+        matched: prefJobTypes.contains(_norm(job.employmentType)),
       ));
     }
     if (job.remoteType.isNotEmpty) {
       chips.add(_InfoPill(
         icon: Icons.public_rounded,
         label: _capitalize(job.remoteType),
+        matched: prefRemote.contains(_norm(job.remoteType)),
       ));
     }
     if (job.openingsCount != null && job.openingsCount! > 0) {
@@ -1718,27 +1739,46 @@ class _InfoChips extends StatelessWidget {
 class _InfoPill extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _InfoPill({required this.icon, required this.label});
+  // True when this chip lines up with one of the user's stated
+  // preferences — drives the green-tinted "matched" treatment.
+  final bool matched;
+  const _InfoPill({
+    required this.icon,
+    required this.label,
+    this.matched = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final bg = matched
+        ? AppColors.success.withValues(alpha: 0.10)
+        : context.surfaceVariant;
+    final border = matched
+        ? AppColors.success.withValues(alpha: 0.30)
+        : Colors.transparent;
+    final fg = matched ? AppColors.success : context.textPrimary;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: EdgeInsets.fromLTRB(matched ? 10 : 12, 8, 12, 8),
       decoration: BoxDecoration(
-        color: context.surfaceVariant,
+        color: bg,
         borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: context.textSecondary),
+          Icon(
+            matched ? Icons.check_rounded : icon,
+            size: matched ? 15 : 14,
+            color: matched ? AppColors.success : context.textSecondary,
+          ),
           const SizedBox(width: 6),
           Text(
             label,
             style: AppTextStyles.labelSmall.copyWith(
               fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: context.textPrimary,
+              fontWeight: FontWeight.w700,
+              color: fg,
               letterSpacing: 0,
             ),
           ),
@@ -1954,88 +1994,37 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-/// Banner above the stat hero when an application deadline is set.
-/// Switches color/copy based on urgency: red < 3 days, amber < 7 days,
-/// neutral otherwise. Hidden entirely when the deadline is in the past
-/// (the apply button itself surfaces "closed" through other state).
-class _DeadlineBadge extends StatelessWidget {
-  final DateTime deadline;
-  const _DeadlineBadge({required this.deadline});
 
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final daysLeft = deadline.difference(now).inDays;
-    if (deadline.isBefore(now)) return const SizedBox.shrink();
-
-    final isUrgent = daysLeft <= 3;
-    final isSoon = daysLeft <= 7;
-    final color = isUrgent
-        ? AppColors.urgent
-        : isSoon
-            ? AppColors.warning
-            : AppColors.info;
-    final label = daysLeft == 0
-        ? 'Closing today'
-        : daysLeft == 1
-            ? 'Closing tomorrow'
-            : 'Closing in $daysLeft days';
-    final dateStr = DateFormat('d MMM').format(deadline.toLocal());
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.timer_outlined, size: 16, color: color),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: AppTextStyles.bodySmall.copyWith(
-              color: color,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const Spacer(),
-          Text(
-            dateStr,
-            style: AppTextStyles.bodySmall.copyWith(
-              color: color.withValues(alpha: 0.85),
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Skills row with optional matched/missing split. When the user has a
-/// match score we colour-tag matched skills (green tick) and dim the
-/// rest as "you may need this" — gives a much faster read of fit than
-/// a flat chip wrap.
+/// Skills row with matched/missing split. A job skill is marked
+/// "matched" (green tick) when EITHER:
+///   1. the AI matcher returned it in `job.matchedSkills`, OR
+///   2. the user's own profile.skills contains it (case-insensitive,
+///      trimmed) — which catches the common case where the AI matcher
+///      hasn't run yet, or under-counted what the user actually has.
+///
+/// Doing the second check client-side fixes the bug where a skill the
+/// user obviously had ("mongodb") was rendering as neutral just because
+/// the LLM missed it.
 class _SkillsBlock extends StatelessWidget {
   final Job job;
   const _SkillsBlock({required this.job});
 
+  static String _norm(String s) => s.toLowerCase().trim();
+
   @override
   Widget build(BuildContext context) {
-    final hasMatch = job.matchScore != null &&
-        (job.matchedSkills.isNotEmpty || job.missingSkills.isNotEmpty);
-    if (!hasMatch) {
-      return Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [for (final s in job.skills) TagChip(label: s)],
-      );
-    }
+    final userSkills = context.select<AuthProvider, Set<String>>(
+      (a) => (a.user?.skills ?? const <String>[])
+          .map(_norm)
+          .where((s) => s.isNotEmpty)
+          .toSet(),
+    );
+    final aiMatched = job.matchedSkills.map(_norm).toSet();
+    final aiMissing = job.missingSkills.map(_norm).toSet();
+    // Union of AI-confirmed matches + everything the user has on their
+    // profile that the job mentions.
+    final matchedSet = {...aiMatched, ...userSkills};
 
-    final matchedSet = job.matchedSkills.map((s) => s.toLowerCase()).toSet();
-    final missingSet = job.missingSkills.map((s) => s.toLowerCase()).toSet();
     return Wrap(
       spacing: 8,
       runSpacing: 8,
@@ -2043,9 +2032,9 @@ class _SkillsBlock extends StatelessWidget {
         for (final s in job.skills)
           _SkillChip(
             label: s,
-            kind: matchedSet.contains(s.toLowerCase())
+            kind: matchedSet.contains(_norm(s))
                 ? _SkillKind.matched
-                : missingSet.contains(s.toLowerCase())
+                : aiMissing.contains(_norm(s))
                     ? _SkillKind.missing
                     : _SkillKind.neutral,
           ),

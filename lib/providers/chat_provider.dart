@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../data/models/conversation_model.dart';
 import '../data/services/api_client.dart';
 import '../data/services/chat_service.dart';
+import '../data/services/push_service.dart';
 import '../data/services/storage_service.dart';
 
 class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
@@ -17,6 +18,15 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   final Set<String> _typingPeers = {};
   bool _loadingConversations = false;
   String? _error;
+
+  /// Conversation the user is currently viewing. While set, the socket
+  /// listener suppresses the local-notification banner for incoming
+  /// messages on that thread (the messages are already on screen).
+  /// ChatScreen sets this in initState and clears it in dispose.
+  String? _activeConversationId;
+  void setActiveConversationId(String? id) {
+    _activeConversationId = id;
+  }
 
   StreamSubscription<({String conversationId, ChatMessage message})>?
       _msgSub;
@@ -83,6 +93,12 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
       final fromMe = myId.isNotEmpty && evt.message.senderId == myId;
       _bumpConversationFor(evt.message, bumpUnread: !fromMe);
       notifyListeners();
+      // Heads-up banner for incoming messages — only when the user
+      // isn't already inside this chat. FCM is silent in foreground
+      // and the bell-tab badge alone is too quiet for messages.
+      if (!fromMe && _activeConversationId != evt.conversationId) {
+        _showMessageBanner(evt.conversationId, evt.message);
+      }
     });
 
     _typingSub ??= _service.onTyping.listen((evt) {
@@ -304,6 +320,37 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   void emitTypingStop({String? conversationId, required String otherUserId}) =>
       _service.emitTypingStop(
           conversationId: conversationId, otherUserId: otherUserId);
+
+  /// Render a foreground heads-up banner for an incoming chat message.
+  /// Title falls back to the seeker name on hirer threads, the company
+  /// name on seeker threads — matching the chat-header-branding rule
+  /// (seekers see the company; hirers see the person).
+  void _showMessageBanner(String conversationId, ChatMessage m) {
+    final myId = StorageService.getUser()?.id ?? '';
+    final conv = _conversations.firstWhere(
+      (c) => c.id == conversationId,
+      orElse: () => Conversation(
+        id: conversationId,
+        participants: const [],
+        updatedAt: DateTime.now(),
+      ),
+    );
+    final other = myId.isEmpty ? null : conv.otherThan(myId);
+    final title = conv.viewerRole == 'seeker' && (conv.companyName?.isNotEmpty ?? false)
+        ? conv.companyName!
+        : (other?.fullName.isNotEmpty == true ? other!.fullName : 'New message');
+    final body = m.content.isNotEmpty
+        ? m.content
+        : (m.file?.filename != null ? '📎 ${m.file!.filename}' : 'New message');
+    PushService.showLocal(
+      title: title,
+      body: body,
+      data: {
+        'type': 'new_message',
+        'conversationId': conversationId,
+      },
+    );
+  }
 
   /// Move the conversation to the top of the list and update its
   /// `lastMessage` to [m]. When [bumpUnread] is true, also increment the

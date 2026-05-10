@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import 'core/routes/app_routes.dart';
 import 'core/theme/app_theme.dart';
 import 'data/models/job_model.dart';
+import 'data/services/api_client.dart';
+import 'data/services/push_service.dart';
 import 'data/services/storage_service.dart';
 import 'presentation/alerts/alerts_screen.dart';
 import 'presentation/auth/email_auth_screen.dart';
@@ -15,8 +17,9 @@ import 'presentation/auth/onboarding_screen.dart';
 import 'presentation/auth/role_picker_screen.dart';
 import 'presentation/auth/splash_screen.dart';
 import 'presentation/auto_apply/auto_apply_log_screen.dart';
-import 'presentation/auto_apply/auto_apply_review_screen.dart';
 import 'presentation/ai/badges_screen.dart';
+import 'presentation/coins/coins_screen.dart';
+import 'presentation/widgets/coin_burst_overlay.dart';
 import 'presentation/ai/hirer_analytics_screen.dart';
 import 'presentation/ai/profile_optimizer_screen.dart';
 import 'presentation/ai/skill_gap_screen.dart';
@@ -46,11 +49,13 @@ import 'presentation/profile/resume_profile_screen.dart';
 import 'presentation/profile/subscription_screen.dart';
 import 'presentation/saved/saved_jobs_screen.dart';
 import 'presentation/search/search_screen.dart';
+import 'providers/ai_quota_provider.dart';
 import 'providers/alert_provider.dart';
 import 'providers/applicants_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/auto_apply_provider.dart';
 import 'providers/chat_provider.dart';
+import 'providers/coins_provider.dart';
 import 'providers/hirer_jobs_provider.dart';
 import 'providers/hirer_provider.dart';
 import 'providers/job_provider.dart';
@@ -100,6 +105,12 @@ Future<void> main() async {
     debugPrint('Firebase.initializeApp failed (push disabled): $e\n$st');
   }
 
+  // Wire FCM + local notifications. Idempotent — also re-called after
+  // sign-in so the device token can be registered against the new user.
+  // Safe to call before the user is authenticated; it'll silently skip
+  // the backend register and retry on the next init().
+  await PushService.init();
+
   runApp(const JobHunterApp());
 }
 
@@ -119,16 +130,89 @@ class JobHunterApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ApplicantsProvider()),
         ChangeNotifierProvider(create: (_) => AutoApplyProvider()),
         ChangeNotifierProvider(create: (_) => ChatProvider()),
+        ChangeNotifierProvider(create: (_) => CoinsProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => AiQuotaProvider()..startBackgroundRefresh()),
       ],
-      child: Consumer<ThemeProvider>(
-        builder: (context, themeProvider, _) => MaterialApp(
+      child: const _UnauthorizedRedirectGate(child: _AppRoot()),
+    );
+  }
+}
+
+/// Wires `ApiClient.onUnauthorized` once the provider tree is mounted so
+/// any 401 from the backend (expired/invalid token) immediately tears
+/// down the chat socket + job feed + auth state and bounces the user to
+/// the login screen — no refresh-token dance, no waiting on the next
+/// screen to notice.
+class _UnauthorizedRedirectGate extends StatefulWidget {
+  final Widget child;
+  const _UnauthorizedRedirectGate({required this.child});
+
+  @override
+  State<_UnauthorizedRedirectGate> createState() =>
+      _UnauthorizedRedirectGateState();
+}
+
+class _UnauthorizedRedirectGateState extends State<_UnauthorizedRedirectGate> {
+  @override
+  void initState() {
+    super.initState();
+    ApiClient.instance.onUnauthorized = _onUnauthorized;
+  }
+
+  @override
+  void dispose() {
+    if (ApiClient.instance.onUnauthorized == _onUnauthorized) {
+      ApiClient.instance.onUnauthorized = null;
+    }
+    super.dispose();
+  }
+
+  void _onUnauthorized() {
+    final nav = PushService.navigatorKey.currentState;
+    final ctx = PushService.navigatorKey.currentContext;
+    if (ctx != null) {
+      // Match the explicit-logout teardown order so a forced redirect
+      // doesn't leave a socket authed as the now-stale user.
+      try {
+        ctx.read<ChatProvider>().signOut();
+      } catch (_) {}
+      try {
+        ctx.read<JobProvider>().signOut();
+      } catch (_) {}
+      try {
+        // Auth provider's signOut also clears tokens — safe to call even
+        // though ApiClient already wiped them; it's idempotent.
+        ctx.read<AuthProvider>().signOut();
+      } catch (_) {}
+    }
+    nav?.pushNamedAndRemoveUntil(AppRoutes.login, (_) => false);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+class _AppRoot extends StatelessWidget {
+  const _AppRoot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, _) => MaterialApp(
         title: 'Job Hunter',
         debugShowCheckedModeBanner: false,
+        navigatorKey: PushService.navigatorKey,
         theme: AppTheme.light,
         darkTheme: AppTheme.dark,
         themeMode: themeProvider.mode,
+        // Wrap every screen in the coin-burst overlay so the "+N 🪙"
+        // animation can play from any earn event regardless of which
+        // screen triggered it.
+        builder: (_, child) => CoinBurstOverlay(
+          child: child ?? const SizedBox.shrink(),
+        ),
         initialRoute: AppRoutes.splash,
         onGenerateRoute: (settings) {
           switch (settings.name) {
@@ -247,10 +331,6 @@ class JobHunterApp extends StatelessWidget {
               return MaterialPageRoute(
                 builder: (_) => const AutoApplySetupScreen(),
               );
-            case AppRoutes.autoApplyReview:
-              return MaterialPageRoute(
-                builder: (_) => const AutoApplyReviewScreen(),
-              );
             case AppRoutes.autoApplyLog:
               return MaterialPageRoute(
                 builder: (_) => const AutoApplyLogScreen(),
@@ -299,6 +379,10 @@ class JobHunterApp extends StatelessWidget {
               return MaterialPageRoute(
                 builder: (_) => const BadgesScreen(),
               );
+            case AppRoutes.coins:
+              return MaterialPageRoute(
+                builder: (_) => const CoinsScreen(),
+              );
             case AppRoutes.hirerAnalytics:
               return MaterialPageRoute(
                 builder: (_) => const HirerAnalyticsScreen(),
@@ -317,7 +401,6 @@ class JobHunterApp extends StatelessWidget {
               );
           }
         },
-        ),
       ),
     );
   }

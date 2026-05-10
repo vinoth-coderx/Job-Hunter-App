@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/hirer_job_model.dart';
 import '../../providers/hirer_jobs_provider.dart';
 
@@ -126,9 +127,16 @@ class _JobsList extends StatelessWidget {
   }
 }
 
-class _JobCard extends StatelessWidget {
+class _JobCard extends StatefulWidget {
   final HirerJob job;
   const _JobCard({required this.job});
+
+  @override
+  State<_JobCard> createState() => _JobCardState();
+}
+
+class _JobCardState extends State<_JobCard> with TapGuardMixin<_JobCard> {
+  HirerJob get job => widget.job;
 
   Color _statusColor(BuildContext context) {
     switch (job.status) {
@@ -145,7 +153,42 @@ class _JobCard extends StatelessWidget {
     return context.textSecondary;
   }
 
-  Future<void> _handleAction(BuildContext context, _JobMenuAction action) async {
+  void _handleAction(BuildContext context, _JobMenuAction action) {
+    // Navigation actions debounce by time (no async work to wait on);
+    // status mutations use the in-flight guard so the popup can't fire
+    // duplicate /jobs PATCHes if the user re-opens the menu mid-call.
+    switch (action) {
+      case _JobMenuAction.viewApplicants:
+        debounceTap(
+          () => Navigator.pushNamed(
+            context,
+            AppRoutes.hirerApplicants,
+            arguments: job.id,
+          ),
+          key: 'nav',
+        );
+        return;
+      case _JobMenuAction.kanban:
+        debounceTap(
+          () => Navigator.pushNamed(
+            context,
+            AppRoutes.hirerKanban,
+            arguments: job.id,
+          ),
+          key: 'nav',
+        );
+        return;
+      case _JobMenuAction.publish:
+      case _JobMenuAction.pause:
+      case _JobMenuAction.resume:
+      case _JobMenuAction.close:
+      case _JobMenuAction.deleteDraft:
+        guard(() => _runMutation(context, action), key: 'mutate');
+    }
+  }
+
+  Future<void> _runMutation(
+      BuildContext context, _JobMenuAction action) async {
     final prov = context.read<HirerJobsProvider>();
     final messenger = ScaffoldMessenger.of(context);
 
@@ -196,18 +239,8 @@ class _JobCard extends StatelessWidget {
         }
         break;
       case _JobMenuAction.viewApplicants:
-        Navigator.pushNamed(
-          context,
-          AppRoutes.hirerApplicants,
-          arguments: job.id,
-        );
-        break;
       case _JobMenuAction.kanban:
-        Navigator.pushNamed(
-          context,
-          AppRoutes.hirerKanban,
-          arguments: job.id,
-        );
+        // Handled in _handleAction via debounceTap.
         break;
     }
   }

@@ -7,7 +7,9 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/app_snackbar.dart';
 import '../../data/models/job_model.dart';
 import '../../data/services/ai_service.dart';
+import '../../providers/ai_quota_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/coins_provider.dart';
 import '../../providers/job_provider.dart';
 import '../../providers/resume_profile_provider.dart';
 import '../widgets/app_avatar.dart';
@@ -54,17 +56,29 @@ class _QuickApplySheetState extends State<QuickApplySheet> {
     if (_generatingLetter) return;
     setState(() => _generatingLetter = true);
     try {
-      final r = await AiService.instance.generateCoverLetter(
+      final res = await AiService.instance.generateCoverLetter(
         jobId: widget.job.id,
       );
       if (!mounted) return;
-      _note.text = r.letter;
+      // Keep the global quota banner in sync — every cover-letter call
+      // returns a fresh snapshot.
+      context.read<AiQuotaProvider>().update(res.quota);
+      final letter = res.data?.letter ?? '';
+      if (letter.isEmpty) {
+        AppSnackbar.error(context, 'AI couldn\'t draft a letter');
+        return;
+      }
+      _note.text = letter;
       AppSnackbar.success(
         context,
-        r.usedAi
+        (res.data?.usedAi ?? false)
             ? 'AI cover letter ready — review and edit'
             : 'Generated a base letter (LLM unavailable)',
       );
+    } on AiQuotaExceededException catch (e) {
+      if (!mounted) return;
+      context.read<AiQuotaProvider>().update(e.quota);
+      AppSnackbar.error(context, e.message);
     } catch (e) {
       if (!mounted) return;
       AppSnackbar.error(context, e.toString());
@@ -94,23 +108,28 @@ class _QuickApplySheetState extends State<QuickApplySheet> {
     }
 
     setState(() => _submitting = true);
-    final ok = await context.read<JobProvider>().quickApplyToJob(
-          widget.job,
-          quickNote: _note.text.trim().isEmpty ? null : _note.text.trim(),
-          screeningAnswers: _answers.entries
-              .where((e) => e.value.text.trim().isNotEmpty)
-              .map((e) =>
-                  (question: e.key, answer: e.value.text.trim()))
-              .toList(),
-        );
+    final jobProvider = context.read<JobProvider>();
+    final ok = await jobProvider.quickApplyToJob(
+      widget.job,
+      quickNote: _note.text.trim().isEmpty ? null : _note.text.trim(),
+      screeningAnswers: _answers.entries
+          .where((e) => e.value.text.trim().isNotEmpty)
+          .map((e) => (question: e.key, answer: e.value.text.trim()))
+          .toList(),
+    );
     if (!mounted) return;
     setState(() => _submitting = false);
     if (!ok) {
       AppSnackbar.error(
         context,
-        context.read<JobProvider>().error ?? 'Could not send application',
+        jobProvider.error ?? 'Could not send application',
       );
       return;
+    }
+    // Sync the header coin pill from the server-confirmed balance.
+    final balance = jobProvider.lastApplyCoinsBalance;
+    if (balance != null) {
+      context.read<CoinsProvider>().setBalance(balance);
     }
     Navigator.of(context).pop(true);
   }
@@ -502,28 +521,58 @@ class _ResumeStatus extends StatelessWidget {
   }
 }
 
+/// Match-fit pill shown above the Quick note section. Colour tier
+/// matches the home/job-detail badges so users build a consistent
+/// "green = strong fit" intuition across screens.
 class _MatchPill extends StatelessWidget {
   final double score;
   const _MatchPill({required this.score});
 
   @override
   Widget build(BuildContext context) {
+    final s = score.round();
+    Color color;
+    String label;
+    if (s >= 90) {
+      color = AppColors.success;
+      label = 'Strong fit · $s% match';
+    } else if (s >= 75) {
+      color = AppColors.primary;
+      label = 'Good fit · $s% match';
+    } else if (s >= 50) {
+      color = AppColors.warning;
+      label = 'Worth a try · $s% match';
+    } else {
+      color = context.textSecondary;
+      label = 'Stretch · $s% match';
+    }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.08),
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            color.withValues(alpha: 0.16),
+            color.withValues(alpha: 0.05),
+          ],
+        ),
         borderRadius: AppRadius.mdRadius,
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.trending_up, size: 16, color: AppColors.primary),
+          Icon(Icons.auto_awesome_rounded, size: 16, color: color),
           const SizedBox(width: 6),
-          Text(
-            'Match: ${score.round()}%',
-            style: AppTextStyles.bodySmall.copyWith(
-              color: AppColors.primary,
-              fontWeight: FontWeight.w800,
+          Expanded(
+            child: Text(
+              label,
+              style: AppTextStyles.bodySmall.copyWith(
+                color: color,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -532,6 +581,10 @@ class _MatchPill extends StatelessWidget {
   }
 }
 
+/// Section header inside the Easy Apply sheet. Adds a small primary
+/// accent bar before the icon so each section reads as a labelled block
+/// rather than an unframed icon-text pair (the old version made
+/// "Quick note" and "Screening questions" feel like body copy).
 class _SectionLabel extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -546,14 +599,24 @@ class _SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 16, color: context.textSecondary),
+        Container(
+          width: 3,
+          height: 16,
+          decoration: BoxDecoration(
+            color: AppColors.primary,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Icon(icon, size: 16, color: AppColors.primary),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             title,
             style: AppTextStyles.bodyMedium.copyWith(
               color: context.textPrimary,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.1,
             ),
           ),
         ),
@@ -563,6 +626,10 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
+/// Yes/No toggle for boolean screening questions. Each option is its
+/// own card with a colour-coded check/cross icon, so the seeker
+/// understands the choice at a glance — the previous plain text buttons
+/// felt indistinguishable from a pair of generic CTAs.
 class _YesNoToggle extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
@@ -576,16 +643,20 @@ class _YesNoToggle extends StatelessWidget {
           child: _toggleButton(
             context,
             label: 'Yes',
+            icon: Icons.check_circle_rounded,
             selected: value == 'Yes',
+            color: AppColors.success,
             onTap: () => onChanged('Yes'),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 10),
         Expanded(
           child: _toggleButton(
             context,
             label: 'No',
+            icon: Icons.cancel_rounded,
             selected: value == 'No',
+            color: AppColors.urgent,
             onTap: () => onChanged('No'),
           ),
         ),
@@ -596,33 +667,45 @@ class _YesNoToggle extends StatelessWidget {
   Widget _toggleButton(
     BuildContext context, {
     required String label,
+    required IconData icon,
     required bool selected,
+    required Color color,
     required VoidCallback onTap,
   }) {
     return Material(
-      color: selected
-          ? AppColors.primary
-          : context.surface,
+      color: selected ? color.withValues(alpha: 0.12) : context.surface,
       borderRadius: AppRadius.inputRadius,
       child: InkWell(
         onTap: onTap,
         borderRadius: AppRadius.inputRadius,
-        child: Container(
-          height: 44,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 48,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: AppRadius.inputRadius,
             border: Border.all(
-              color: selected ? AppColors.primary : context.cardBorder,
+              color: selected ? color : context.cardBorder,
               width: selected ? 1.5 : 1,
             ),
           ),
-          child: Text(
-            label,
-            style: AppTextStyles.bodyMedium.copyWith(
-              color: selected ? Colors.white : context.textPrimary,
-              fontWeight: FontWeight.w700,
-            ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: selected ? color : context.textTertiary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: AppTextStyles.bodyMedium.copyWith(
+                  color: selected ? color : context.textPrimary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
           ),
         ),
       ),

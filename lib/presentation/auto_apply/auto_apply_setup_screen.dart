@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/auto_apply_settings_model.dart';
 import '../../data/services/auto_apply_service.dart';
 import '../../providers/auto_apply_provider.dart';
+import '../../providers/job_provider.dart';
 import '../widgets/custom_button.dart';
 
 /// Auto-Apply settings screen.
@@ -24,7 +26,8 @@ class AutoApplySetupScreen extends StatefulWidget {
   State<AutoApplySetupScreen> createState() => _AutoApplySetupScreenState();
 }
 
-class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
+class _AutoApplySetupScreenState extends State<AutoApplySetupScreen>
+    with TapGuardMixin<AutoApplySetupScreen> {
   // Controllers for chip-input fields (kept until dispose).
   final _roleInput = TextEditingController();
   final _locationInput = TextEditingController();
@@ -34,7 +37,6 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
 
   // Local edit state — copied from provider on first load, written back on save.
   bool _isEnabled = false;
-  bool _reviewMode = true;
   String _runTime = '09:00';
   Set<String> _runDays = {'monday', 'tuesday', 'wednesday', 'thursday', 'friday'};
   int _dailyLimit = 10;
@@ -66,7 +68,6 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
     if (_hydrated) return;
     _hydrated = true;
     _isEnabled = s.isEnabled;
-    _reviewMode = s.reviewMode;
     _runTime = s.runTime;
     _runDays = s.runDays.toSet();
     _dailyLimit = s.dailyLimit;
@@ -94,6 +95,13 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
             'Run done · matched ${r['jobsMatched']} · applied ${r['jobsApplied']}'),
         behavior: SnackBarBehavior.floating,
       ));
+      // Pull the freshest applications list when the run actually
+      // applied to anything — keeps job cards in the home/search feed
+      // in sync with the new "Applied" status without a full reload.
+      final appliedCount = (r['jobsApplied'] as num?)?.toInt() ?? 0;
+      if (appliedCount > 0 && mounted) {
+        await context.read<JobProvider>().refreshApplications();
+      }
       if (mounted) await context.read<AutoApplyProvider>().load();
     } catch (e) {
       if (!mounted) return;
@@ -110,7 +118,10 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
       dailyLimit: _dailyLimit,
       preferences: _prefs,
       matchingRules: _rules,
-      reviewMode: _reviewMode,
+      // Always direct-apply now — the legacy reviewMode toggle was
+      // removed. Pinning to false keeps existing accounts in sync if
+      // their saved record still has reviewMode=true.
+      reviewMode: false,
     );
     if (!mounted) return;
     if (!ok) {
@@ -209,9 +220,6 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
               const SizedBox(height: 16),
               _section('Matching rules'),
               _matchingCard(),
-              const SizedBox(height: 16),
-              _section('Review mode'),
-              _reviewModeCard(),
               const SizedBox(height: 24),
               PrimaryButton(
                 label: 'Save preferences',
@@ -219,38 +227,9 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
                 onPressed: prov.loading ? null : _save,
               ),
               if (s.isEnabled) ...[
-                const SizedBox(height: 8),
-                SecondaryButton(
-                  label: s.isPaused ? 'Resume Auto-Apply' : 'Pause Auto-Apply',
-                  icon: s.isPaused ? Icons.play_arrow : Icons.pause,
-                  onPressed: () async {
-                    final ok = s.isPaused
-                        ? await prov.resume()
-                        : await _showPauseSheet();
-                    if (!mounted) return;
-                    if (ok) setState(() {});
-                  },
-                ),
-                const SizedBox(height: 8),
-                SecondaryButton(
-                  label: 'Run now',
-                  icon: Icons.flash_on,
-                  onPressed: prov.loading ? null : _runNow,
-                ),
-                const SizedBox(height: 8),
-                SecondaryButton(
-                  label: 'Review today\'s matches',
-                  icon: Icons.fact_check_outlined,
-                  onPressed: () => Navigator.pushNamed(
-                      context, AppRoutes.autoApplyReview),
-                ),
-                const SizedBox(height: 8),
-                SecondaryButton(
-                  label: 'Run history',
-                  icon: Icons.history,
-                  onPressed: () => Navigator.pushNamed(
-                      context, AppRoutes.autoApplyLog),
-                ),
+                const SizedBox(height: 16),
+                _section('Quick actions'),
+                _quickActionsGrid(prov, s),
               ],
             ],
           );
@@ -367,6 +346,63 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
             style: AppTextStyles.bodyMedium.copyWith(
                 fontWeight: FontWeight.w700, color: context.textPrimary)),
       );
+
+  /// 2x2 polished action grid replacing the old vertical stack of 4
+  /// SecondaryButtons. Each tile carries its own colour + icon so the
+  /// visual weight matches the importance ("Run now" is the loud one,
+  /// "Run history" is the quiet one).
+  Widget _quickActionsGrid(AutoApplyProvider prov, AutoApplySettings s) {
+    final isPaused = s.isPaused;
+    final tiles = <_ActionTileSpec>[
+      _ActionTileSpec(
+        icon: isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+        label: isPaused ? 'Resume' : 'Pause',
+        sublabel: isPaused ? 'Restart auto-apply' : 'Take a break',
+        color: isPaused ? AppColors.success : AppColors.warning,
+        onTap: isBusy('pauseResume')
+            ? null
+            : () => guard(
+                  () async {
+                    final ok = isPaused
+                        ? await prov.resume()
+                        : await _showPauseSheet();
+                    if (!mounted) return;
+                    if (ok) setState(() {});
+                  },
+                  key: 'pauseResume',
+                ),
+      ),
+      _ActionTileSpec(
+        icon: Icons.flash_on_rounded,
+        label: 'Run now',
+        sublabel: 'Apply this minute',
+        color: AppColors.primary,
+        onTap: (prov.loading || isBusy('runNow'))
+            ? null
+            : () => guard(() async => _runNow(), key: 'runNow'),
+      ),
+      _ActionTileSpec(
+        icon: Icons.history_rounded,
+        label: 'Run history',
+        sublabel: 'Past activity',
+        color: context.textSecondary,
+        onTap: () => debounceTap(
+          () => Navigator.pushNamed(context, AppRoutes.autoApplyLog),
+          key: 'nav-history',
+        ),
+      ),
+    ];
+
+    return GridView.count(
+      crossAxisCount: 2,
+      mainAxisSpacing: 10,
+      crossAxisSpacing: 10,
+      childAspectRatio: 1.55,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      children: tiles.map((t) => _ActionTile(spec: t)).toList(),
+    );
+  }
 
   Widget _statusCard(AutoApplySettings s) {
     return _Card(
@@ -552,22 +588,32 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
             },
           ),
           const SizedBox(height: 12),
-          _label('Sources'),
-          Wrap(
-            spacing: 6,
-            children: const ['native', 'external'].map((src) {
-              final on = _prefs.sources.contains(src);
-              return FilterChip(
-                label: Text(src),
-                selected: on,
-                onSelected: (sel) => setState(() {
-                  final next = [..._prefs.sources];
-                  sel ? next.add(src) : next.remove(src);
-                  _prefs = _prefs.copyWith(sources: next);
-                }),
-                selectedColor: AppColors.primary.withValues(alpha: 0.2),
-              );
-            }).toList(),
+          // Sources picker removed — auto-apply is now native easy-apply
+          // only. External / aggregator listings need a custom form or a
+          // third-party site, neither of which the runner can submit to
+          // unattended, so we don't even surface them as an option.
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.bolt_rounded,
+                    size: 16, color: AppColors.primary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Auto-applies only to one-tap (Easy Apply) jobs.',
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: context.textSecondary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -647,38 +693,6 @@ class _AutoApplySetupScreenState extends State<AutoApplySetupScreen> {
                 .toList(),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _reviewModeCard() {
-    return _Card(
-      child: RadioGroup<bool>(
-        groupValue: _reviewMode,
-        onChanged: (v) {
-          if (v != null) setState(() => _reviewMode = v);
-        },
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            RadioListTile<bool>(
-              value: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text('Review mode'),
-              subtitle: Text(
-                  'I see today\'s matches first, then approve which to apply to'),
-              activeColor: AppColors.primary,
-            ),
-            RadioListTile<bool>(
-              value: false,
-              contentPadding: EdgeInsets.zero,
-              title: Text('Auto-send'),
-              subtitle:
-                  Text('Apply automatically to all qualifying matches'),
-              activeColor: AppColors.primary,
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -821,3 +835,97 @@ class _Card extends StatelessWidget {
         child: child,
       );
 }
+
+/// Spec for a single action tile in the quick-actions grid. Kept as a
+/// plain data class so the grid builder reads top-to-bottom without
+/// nested closures.
+class _ActionTileSpec {
+  final IconData icon;
+  final String label;
+  final String sublabel;
+  final Color color;
+  final VoidCallback? onTap;
+  const _ActionTileSpec({
+    required this.icon,
+    required this.label,
+    required this.sublabel,
+    required this.color,
+    required this.onTap,
+  });
+}
+
+/// Polished tile used in the Auto-Apply quick-actions grid. Each tile is
+/// its own card with a tinted accent strip + icon, two lines of text,
+/// and a chevron — matches the visual rhythm of the rest of the screen
+/// instead of stacking 4 identical secondary buttons.
+class _ActionTile extends StatelessWidget {
+  final _ActionTileSpec spec;
+  const _ActionTile({required this.spec});
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = spec.onTap == null;
+    return Opacity(
+      opacity: disabled ? 0.55 : 1,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: spec.onTap,
+          child: Container(
+            decoration: BoxDecoration(
+              color: context.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: context.cardBorder),
+              boxShadow: [
+                BoxShadow(
+                  color: spec.color.withValues(alpha: 0.06),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: spec.color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(spec.icon, color: spec.color, size: 20),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        spec.label,
+                        style: AppTextStyles.bodyMedium.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: context.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        spec.sublabel,
+                        style: AppTextStyles.labelSmall.copyWith(
+                          color: context.textTertiary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }}

@@ -10,9 +10,11 @@ import 'package:provider/provider.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
+import '../../../core/utils/tap_guard_mixin.dart';
 import '../../../data/models/resume_profile_model.dart';
 import '../../../data/services/user_service.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/coins_provider.dart';
 import '../../../providers/resume_profile_provider.dart';
 import '../edit_field_screen.dart';
 
@@ -1350,6 +1352,7 @@ Future<void> _runResumeAutoPopulate(
   // async work, even if the originating widget has been unmounted.
   final navigator = Navigator.of(context, rootNavigator: true);
   final messenger = ScaffoldMessenger.of(context);
+  final coinsProvider = context.read<CoinsProvider>();
   final overlayState = _ResumeAutoFillOverlayController();
   _showAutoFillOverlay(context, overlayState);
 
@@ -1375,6 +1378,9 @@ Future<void> _runResumeAutoPopulate(
 
     overlayState.update('Uploading resume…');
     await userService.uploadResume(file);
+    // Resume upload typically pushes the user across 100% completeness;
+    // refresh the wallet so the home pill reflects the +50 bonus.
+    coinsProvider.refresh();
 
     overlayState.update('Reading your resume…');
     final parsed = await userService.parseResume();
@@ -3600,7 +3606,7 @@ Widget _emptyState(
   );
 }
 
-class _ItemCard extends StatelessWidget {
+class _ItemCard extends StatefulWidget {
   final String title;
   final String subtitle;
   final VoidCallback onEdit;
@@ -3612,6 +3618,11 @@ class _ItemCard extends StatelessWidget {
     required this.onDelete,
   });
 
+  @override
+  State<_ItemCard> createState() => _ItemCardState();
+}
+
+class _ItemCardState extends State<_ItemCard> with TapGuardMixin<_ItemCard> {
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -3628,11 +3639,11 @@ class _ItemCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
+                Text(widget.title,
                     style: AppTextStyles.bodyMedium
                         .copyWith(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                Text(subtitle,
+                Text(widget.subtitle,
                     style: AppTextStyles.bodySmall
                         .copyWith(height: 1.5)),
               ],
@@ -3642,34 +3653,41 @@ class _ItemCard extends StatelessWidget {
           Column(
             children: [
               IconButton(
-                onPressed: onEdit,
+                onPressed: () => debounceTap(widget.onEdit, key: 'edit'),
                 icon: const Icon(Icons.edit_outlined,
                     color: AppColors.primary, size: 20),
                 visualDensity: VisualDensity.compact,
               ),
               IconButton(
-                onPressed: () async {
-                  final ok = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Delete?'),
-                      content: const Text('This entry will be removed.'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Cancel'),
+                onPressed: isBusy('delete')
+                    ? null
+                    : () => guard(
+                          () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Delete?'),
+                                content:
+                                    const Text('This entry will be removed.'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(ctx, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    style: TextButton.styleFrom(
+                                        foregroundColor: AppColors.urgent),
+                                    child: const Text('Delete'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (ok == true) widget.onDelete();
+                          },
+                          key: 'delete',
                         ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          style: TextButton.styleFrom(
-                              foregroundColor: AppColors.urgent),
-                          child: const Text('Delete'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (ok == true) onDelete();
-                },
                 icon: const Icon(Icons.delete_outline_rounded,
                     color: AppColors.urgent, size: 20),
                 visualDensity: VisualDensity.compact,

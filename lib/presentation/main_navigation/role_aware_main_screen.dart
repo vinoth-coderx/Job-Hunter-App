@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/app_snackbar.dart';
 import '../../data/models/job_model.dart';
+import '../../providers/ai_quota_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/job_provider.dart';
+import '../ai/widgets/ai_quota_banner.dart';
 import '../auth/email_verification_banner.dart';
 import 'hirer_main_navigation_screen.dart';
 import 'main_navigation_screen.dart';
@@ -49,6 +51,9 @@ class _RoleAwareMainScreenState extends State<RoleAwareMainScreen> {
       chat.setActiveRole(role);
       _alertNotifier = context.read<JobProvider>().highMatchAlerts
         ..addListener(_onHighMatches);
+      // Pull the user's current AI quota so the banner can show the
+      // countdown/upgrade CTA from the very first frame after sign-in.
+      context.read<AiQuotaProvider>().refresh();
     });
   }
 
@@ -113,6 +118,10 @@ class _RoleAwareMainScreenState extends State<RoleAwareMainScreen> {
         child: Column(
           children: [
             const EmailVerificationBanner(),
+            AiQuotaBanner(
+              onUpgradeTap: () =>
+                  Navigator.of(context).pushNamed('/subscription'),
+            ),
             Expanded(child: shell),
           ],
         ),

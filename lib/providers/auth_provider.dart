@@ -113,6 +113,9 @@ class AuthProvider extends ChangeNotifier {
       // user can at least open the app — feed loads will then surface the
       // network error in their own UI.
       _user = await _authService.loginAsGuest();
+      // Fresh session — clear the latch so a future 401 in this session
+      // can fire the redirect again.
+      ApiClient.instance.resetUnauthorizedFlag();
     } catch (e) {
       _user = null;
       _error = _formatError(e);
@@ -140,6 +143,7 @@ class AuthProvider extends ChangeNotifier {
       _user = result.user;
       _lastSignInIsNewUser = result.isNewUser;
       await StorageService.setGuestMode(false);
+      ApiClient.instance.resetUnauthorizedFlag();
       _status = AuthStatus.authenticated;
       notifyListeners();
       return true;
@@ -167,6 +171,7 @@ class AuthProvider extends ChangeNotifier {
       );
       _lastSignInIsNewUser = false;
       await StorageService.setGuestMode(false);
+      ApiClient.instance.resetUnauthorizedFlag();
       _status = AuthStatus.authenticated;
       notifyListeners();
       return true;
@@ -198,6 +203,7 @@ class AuthProvider extends ChangeNotifier {
       );
       _lastSignInIsNewUser = true;
       await StorageService.setGuestMode(false);
+      ApiClient.instance.resetUnauthorizedFlag();
       _status = AuthStatus.authenticated;
       notifyListeners();
       return true;

@@ -547,52 +547,75 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _showLogoutDialog(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
-        title: const Text('Log Out'),
-        content: const Text('Are you sure you want to log out?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(
-              'Cancel',
-              style: TextStyle(color: context.textSecondary),
+      builder: (dialogContext) {
+        // Local in-flight flag so a double-tap on "Log Out" can't fire
+        // signOut twice (which would tear down providers in mid-flight
+        // and double-push the login route).
+        var loggingOut = false;
+        return StatefulBuilder(
+          builder: (ctx, setLocal) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(dialogContext);
-              // Tear down the chat socket BEFORE clearing the auth token —
-              // otherwise the socket lingers authed as the old user until
-              // it's GC'd, which leaks events into the next signed-in
-              // session if the user logs back in immediately.
-              context.read<ChatProvider>().signOut();
-              // Clear job-feed state too: cancels the periodic refresh
-              // timer and resets the high-match alert dedup so the next
-              // signed-in user gets fresh alerts (otherwise the previous
-              // user's "already alerted" set would silently swallow them).
-              context.read<JobProvider>().signOut();
-              await context.read<AuthProvider>().signOut();
-              if (context.mounted) {
-                Navigator.pushNamedAndRemoveUntil(
-                  context,
-                  AppRoutes.login,
-                  (route) => false,
-                );
-              }
-            },
-            child: const Text(
-              'Log Out',
-              style: TextStyle(
-                color: AppColors.urgent,
-                fontWeight: FontWeight.w600,
+            title: const Text('Log Out'),
+            content: const Text('Are you sure you want to log out?'),
+            actions: [
+              TextButton(
+                onPressed: loggingOut
+                    ? null
+                    : () => Navigator.pop(dialogContext),
+                child: Text(
+                  'Cancel',
+                  style: TextStyle(color: context.textSecondary),
+                ),
               ),
-            ),
+              TextButton(
+                onPressed: loggingOut
+                    ? null
+                    : () async {
+                        setLocal(() => loggingOut = true);
+                        // Tear down the chat socket BEFORE clearing the
+                        // auth token — otherwise the socket lingers
+                        // authed as the old user until it's GC'd, which
+                        // leaks events into the next signed-in session
+                        // if the user logs back in immediately.
+                        context.read<ChatProvider>().signOut();
+                        // Clear job-feed state too: cancels the periodic
+                        // refresh timer and resets the high-match alert
+                        // dedup so the next signed-in user gets fresh
+                        // alerts (otherwise the previous user's "already
+                        // alerted" set would silently swallow them).
+                        context.read<JobProvider>().signOut();
+                        await context.read<AuthProvider>().signOut();
+                        if (!context.mounted) return;
+                        Navigator.pop(dialogContext);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          AppRoutes.login,
+                          (route) => false,
+                        );
+                      },
+                child: loggingOut
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.urgent,
+                        ),
+                      )
+                    : const Text(
+                        'Log Out',
+                        style: TextStyle(
+                          color: AppColors.urgent,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
