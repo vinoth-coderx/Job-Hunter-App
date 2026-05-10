@@ -1,0 +1,122 @@
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/constants/app_constants.dart';
+import '../models/resume_profile_model.dart';
+import '../models/user_model.dart';
+
+class StorageService {
+  static SharedPreferences? _prefs;
+
+  static Future<void> init() async {
+    _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  static Future<void> saveUser(UserModel user) async {
+    await init();
+    await _prefs!.setString(AppConstants.keyUserData, jsonEncode(user.toJson()));
+    await _prefs!.setBool(AppConstants.keyIsLoggedIn, true);
+  }
+
+  static UserModel? getUser() {
+    final data = _prefs?.getString(AppConstants.keyUserData);
+    if (data == null) return null;
+    try {
+      return UserModel.fromJson(jsonDecode(data) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool isLoggedIn() {
+    return _prefs?.getBool(AppConstants.keyIsLoggedIn) ?? false;
+  }
+
+  static Future<void> logout() async {
+    await init();
+    await _prefs!.remove(AppConstants.keyUserData);
+    await _prefs!.remove(AppConstants.keyAccessToken);
+    await _prefs!.remove(AppConstants.keyRefreshToken);
+    await _prefs!.setBool(AppConstants.keyIsLoggedIn, false);
+    await _prefs!.setBool(AppConstants.keyIsGuest, false);
+  }
+
+  static Future<void> setGuestMode(bool isGuest) async {
+    await init();
+    await _prefs!.setBool(AppConstants.keyIsGuest, isGuest);
+  }
+
+  static bool isGuestMode() {
+    return _prefs?.getBool(AppConstants.keyIsGuest) ?? false;
+  }
+
+  static Future<void> saveTokens({
+    required String accessToken,
+    required String refreshToken,
+  }) async {
+    await init();
+    await _prefs!.setString(AppConstants.keyAccessToken, accessToken);
+    await _prefs!.setString(AppConstants.keyRefreshToken, refreshToken);
+  }
+
+  static String? getAccessToken() =>
+      _prefs?.getString(AppConstants.keyAccessToken);
+
+  static String? getRefreshToken() =>
+      _prefs?.getString(AppConstants.keyRefreshToken);
+
+  static Future<void> clearTokens() async {
+    await init();
+    await _prefs!.remove(AppConstants.keyAccessToken);
+    await _prefs!.remove(AppConstants.keyRefreshToken);
+  }
+
+  static Future<void> saveSavedJobs(List<String> jobIds) async {
+    await init();
+    await _prefs!.setStringList(AppConstants.keySavedJobs, jobIds);
+  }
+
+  static List<String> getSavedJobs() {
+    return _prefs?.getStringList(AppConstants.keySavedJobs) ?? [];
+  }
+
+  static Future<void> saveResumeProfile(ResumeProfile profile) async {
+    await init();
+    await _prefs!.setString(
+        AppConstants.keyResumeProfile, jsonEncode(profile.toJson()));
+  }
+
+  static ResumeProfile? getResumeProfile() {
+    final data = _prefs?.getString(AppConstants.keyResumeProfile);
+    if (data == null) return null;
+    try {
+      return ResumeProfile.fromJson(
+          jsonDecode(data) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> saveThemeMode(String mode) async {
+    await init();
+    await _prefs!.setString(AppConstants.keyThemeMode, mode);
+  }
+
+  static String? getThemeMode() {
+    return _prefs?.getString(AppConstants.keyThemeMode);
+  }
+
+  /// Persisted set of job ids the seeker has already been alerted about
+  /// for "70%+ match" pushes. Drives dedup so a job that was relevant
+  /// last refresh doesn't re-trigger the toast on the next 2-hour tick.
+  static Future<void> saveAlertedHighMatchJobIds(Set<String> ids) async {
+    await init();
+    await _prefs!
+        .setStringList(AppConstants.keyAlertedHighMatchJobIds, ids.toList());
+  }
+
+  static Set<String> getAlertedHighMatchJobIds() {
+    final raw =
+        _prefs?.getStringList(AppConstants.keyAlertedHighMatchJobIds) ?? const [];
+    return raw.toSet();
+  }
+}
