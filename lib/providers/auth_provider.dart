@@ -24,6 +24,7 @@ class AuthProvider extends ChangeNotifier {
   List<SubscriptionPlanInfo> _plans = const [];
   SubscriptionState _subscriptionState = SubscriptionState.free;
   bool _subscriptionLoading = false;
+  bool _lastSignInIsNewUser = false;
 
   AuthStatus get status => _status;
   UserModel? get user => _user;
@@ -47,6 +48,12 @@ class AuthProvider extends ChangeNotifier {
   List<SubscriptionPlanInfo> get plans => _plans;
   SubscriptionState get subscriptionState => _subscriptionState;
   bool get subscriptionLoading => _subscriptionLoading;
+
+  /// True only for the call immediately following a fresh signup
+  /// (Firebase reports `additionalUserInfo.isNewUser` for Google,
+  /// or the email-signup path sets it). Drives the post-auth route
+  /// to onboarding for new accounts only.
+  bool get lastSignInIsNewUser => _lastSignInIsNewUser;
 
   Future<void> checkAuthStatus() async {
     // Check guest first: a guest session ALSO sets the access-token flag
@@ -129,7 +136,9 @@ class AuthProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      _user = await _authService.signInWithGoogle();
+      final result = await _authService.signInWithGoogle();
+      _user = result.user;
+      _lastSignInIsNewUser = result.isNewUser;
       await StorageService.setGuestMode(false);
       _status = AuthStatus.authenticated;
       notifyListeners();
@@ -137,6 +146,98 @@ class AuthProvider extends ChangeNotifier {
     } catch (e) {
       _error = _formatError(e);
       _status = AuthStatus.error;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Email/password sign-in via Firebase Auth → backend `/auth/firebase`.
+  /// Returns true on success and flips the provider to `authenticated`.
+  Future<bool> signInWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    _status = AuthStatus.loading;
+    _error = null;
+    notifyListeners();
+    try {
+      _user = await _authService.signInWithFirebase(
+        email: email,
+        password: password,
+      );
+      _lastSignInIsNewUser = false;
+      await StorageService.setGuestMode(false);
+      _status = AuthStatus.authenticated;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = _formatError(e);
+      _status = AuthStatus.error;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Email/password sign-up via Firebase Auth → backend `/auth/firebase`.
+  /// The backend creates the User document on first hybrid sign-in.
+  Future<bool> signUpWithEmail({
+    required String name,
+    required String email,
+    required String password,
+    String? phone,
+  }) async {
+    _status = AuthStatus.loading;
+    _error = null;
+    notifyListeners();
+    try {
+      _user = await _authService.signUpWithFirebase(
+        name: name,
+        email: email,
+        password: password,
+        phone: phone,
+      );
+      _lastSignInIsNewUser = true;
+      await StorageService.setGuestMode(false);
+      _status = AuthStatus.authenticated;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = _formatError(e);
+      _status = AuthStatus.error;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Trigger a Firebase password-reset email for the current user's
+  /// email. Used in the "I lost my password" flow before sign-in is
+  /// possible — for the in-app forgot-password screen we go through
+  /// FirebaseAuth directly. Returns true on success.
+  Future<bool> sendEmailVerification() async {
+    try {
+      await _authService.sendEmailVerification();
+      return true;
+    } catch (e) {
+      _error = _formatError(e);
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Re-checks whether the user has completed email verification. When
+  /// they have, refreshes the cached User and returns true so the UI
+  /// can hide its "verify your email" banner.
+  Future<bool> refreshEmailVerifiedStatus() async {
+    try {
+      final fresh = await _authService.refreshEmailVerifiedStatus();
+      if (fresh != null) {
+        _user = fresh;
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      _error = _formatError(e);
       notifyListeners();
       return false;
     }

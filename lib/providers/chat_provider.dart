@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../data/models/conversation_model.dart';
 import '../data/services/api_client.dart';
 import '../data/services/chat_service.dart';
+import '../data/services/storage_service.dart';
 
 class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   final ChatService _service = ChatService.instance;
@@ -72,11 +73,15 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
         return;
       }
       _messages[evt.conversationId] = [...list, evt.message];
-      // bumpUnread=true: this code path only runs for genuinely new
-      // messages (the dedup above filters out our own optimistic copies),
-      // so the bottom-nav / header chat badge should update live without
-      // waiting for a manual refresh.
-      _bumpConversationFor(evt.message, bumpUnread: true);
+      // Skip the unread bump for our own messages echoed back via the
+      // socket fan-out. Normally the dedup check above swallows them
+      // because sendMessage()'s optimistic insert lands first — but for
+      // file uploads (and any flaky-network send) the socket can beat
+      // the HTTP response, the dedup misses, and we'd otherwise show a
+      // "1 unread" badge against our own outgoing message.
+      final myId = StorageService.getUser()?.id ?? '';
+      final fromMe = myId.isNotEmpty && evt.message.senderId == myId;
+      _bumpConversationFor(evt.message, bumpUnread: !fromMe);
       notifyListeners();
     });
 
@@ -103,6 +108,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
                   receiverId: m.receiverId,
                   type: m.type,
                   content: m.content,
+                  file: m.file,
                   isRead: true,
                   readAt: m.readAt ?? DateTime.now(),
                   sentAt: m.sentAt,
@@ -179,13 +185,22 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<ChatMessage?> sendMessage({
     required String conversationId,
-    required String content,
+    String content = '',
+    String? attachmentPath,
+    List<int>? attachmentBytes,
+    String? attachmentFilename,
+    String? attachmentContentType,
   }) async {
-    if (content.trim().isEmpty) return null;
+    final hasAttachment = attachmentPath != null || attachmentBytes != null;
+    if (content.trim().isEmpty && !hasAttachment) return null;
     try {
       final m = await _service.sendMessage(
         conversationId: conversationId,
         content: content.trim(),
+        attachmentPath: attachmentPath,
+        attachmentBytes: attachmentBytes,
+        attachmentFilename: attachmentFilename,
+        attachmentContentType: attachmentContentType,
       );
       // Optimistic placement — socket fanout will dedupe via the id check
       // in the message subscription.

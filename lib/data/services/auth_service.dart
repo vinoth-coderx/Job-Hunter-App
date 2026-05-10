@@ -119,10 +119,18 @@ class AuthService {
         phone: phone,
       );
 
-  /// Native Google Sign-In: opens the system account picker, gets an ID token
-  /// from Google, then exchanges it for our own access/refresh tokens via
-  /// `POST /auth/google/mobile { idToken }`.
-  Future<UserModel> signInWithGoogle() async {
+  /// Google Sign-In via Firebase Auth. Opens the native Google picker,
+  /// exchanges the OAuth credential for a Firebase session, then hands
+  /// the Firebase ID token to `/auth/firebase`. Existing accounts that
+  /// signed up via the legacy `/auth/google/mobile` flow get their
+  /// `firebaseUid` linked on the first hybrid sign-in — no migration
+  /// step required on the user's end.
+  ///
+  /// Falls back to the legacy `/auth/google/mobile` endpoint when
+  /// FirebaseAuth itself isn't initialised (e.g. dev build without
+  /// google-services.json). Production should always take the Firebase
+  /// path.
+  Future<({UserModel user, bool isNewUser})> signInWithGoogle() async {
     if (!AppConstants.googleAuthConfigured) {
       throw 'Google sign-in is not configured. Add GOOGLE_WEB_CLIENT_ID to env/<env>.json and re-run.';
     }
@@ -131,51 +139,63 @@ class AuthService {
     try {
       account = await google.signIn();
     } on PlatformException catch (e) {
-      final msg = e.message ?? '';
-      // code 10 = DEVELOPER_ERROR: SHA-1 / package name not registered
-      // as an Android OAuth client in Google Cloud Console (or the
-      // Web Client ID belongs to a different project). The picker
-      // appears briefly and then auto-closes.
-      if (e.code == 'sign_in_failed' && msg.contains('10')) {
-        throw 'Google sign-in misconfigured (DEVELOPER_ERROR 10). '
-            'Register this app\'s package name + debug SHA-1 as an '
-            'Android OAuth client in the same Google Cloud project as '
-            'GOOGLE_WEB_CLIENT_ID.';
-      }
-      // ApiException 7 = NETWORK_ERROR. On a working network this almost
-      // always means the Android OAuth client (package name + SHA-1)
-      // isn't registered in Google Cloud Console for this Firebase /
-      // OAuth project — Play Services tries to validate the app and
-      // can't, so it surfaces a misleading "network_error". Telling the
-      // user to "check your internet" wastes their time.
-      if (e.code == 'network_error' || msg.contains('ApiException: 7')) {
-        throw 'Google sign-in is blocked by Play Services config. '
-            'Add this app as an Android OAuth client (package: '
-            'com.vinoth.jobhunter, debug SHA-1 from `gradlew '
-            'signingReport`) in the same Google Cloud project as '
-            'GOOGLE_WEB_CLIENT_ID, then reinstall the app.';
-      }
-      throw 'Google sign-in failed: ${e.code} $msg'.trim();
+      throw _googlePlatformMessage(e);
     } catch (e) {
       throw 'Google sign-in failed: $e';
     }
     if (account == null) {
       throw 'Sign-in cancelled';
     }
-    final auth = await account.authentication;
-    final idToken = auth.idToken;
-    if (idToken == null || idToken.isEmpty) {
+    final googleAuth = await account.authentication;
+    final googleIdToken = googleAuth.idToken;
+    final googleAccessToken = googleAuth.accessToken;
+    if (googleIdToken == null || googleIdToken.isEmpty) {
       throw 'Google did not return an ID token. Check the Web Client ID.';
     }
-    final body = await _api.post(
-      'auth/google/mobile',
-      auth: false,
-      body: {
-        'idToken': idToken,
-        if (auth.accessToken != null) 'accessToken': auth.accessToken,
-      },
-    );
-    return _persistAuth(body);
+
+    // Firebase is the only sign-in path now. The legacy
+    // /auth/google/mobile fallback was removed when the backend
+    // committed fully to Firebase Auth — any failure here surfaces
+    // straight to the UI instead of silently downgrading.
+    try {
+      final cred = GoogleAuthProvider.credential(
+        idToken: googleIdToken,
+        accessToken: googleAccessToken,
+      );
+      final firebaseCred =
+          await FirebaseAuth.instance.signInWithCredential(cred);
+      final firebaseIdToken = await firebaseCred.user?.getIdToken();
+      if (firebaseIdToken == null || firebaseIdToken.isEmpty) {
+        throw 'Firebase did not return an ID token after Google sign-in';
+      }
+      final body = await _api.post(
+        'auth/firebase',
+        auth: false,
+        body: {'idToken': firebaseIdToken},
+      );
+      final isNewUser = firebaseCred.additionalUserInfo?.isNewUser ?? false;
+      return (user: await _persistAuth(body), isNewUser: isNewUser);
+    } on FirebaseAuthException catch (e) {
+      throw _firebaseAuthMessage(e);
+    }
+  }
+
+  String _googlePlatformMessage(PlatformException e) {
+    final msg = e.message ?? '';
+    if (e.code == 'sign_in_failed' && msg.contains('10')) {
+      return 'Google sign-in misconfigured (DEVELOPER_ERROR 10). '
+          "Register this app's package name + debug SHA-1 as an "
+          'Android OAuth client in the same Google Cloud project as '
+          'GOOGLE_WEB_CLIENT_ID.';
+    }
+    if (e.code == 'network_error' || msg.contains('ApiException: 7')) {
+      return 'Google sign-in is blocked by Play Services config. '
+          'Add this app as an Android OAuth client (package: '
+          'com.vinoth.jobhunter, debug SHA-1 from `gradlew '
+          'signingReport`) in the same Google Cloud project as '
+          'GOOGLE_WEB_CLIENT_ID, then reinstall the app.';
+    }
+    return 'Google sign-in failed: ${e.code} $msg'.trim();
   }
 
   /// Stateless guest session: backend issues a short-lived JWT carrying
@@ -306,6 +326,67 @@ class AuthService {
       default:
         return 'Sign-in failed: ${e.message ?? e.code}';
     }
+  }
+
+  /// Sends a Firebase email-verification link to the currently signed-in
+  /// Firebase user. Throws if no user is signed in (shouldn't happen
+  /// from authenticated app screens — caller can show a generic error).
+  Future<void> sendEmailVerification() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw 'You need to sign in again before requesting verification.';
+    }
+    try {
+      await user.sendEmailVerification();
+    } on FirebaseAuthException catch (e) {
+      throw _firebaseAuthMessage(e);
+    }
+  }
+
+  /// After the user clicks the verification link in their email, call
+  /// this to re-fetch the Firebase user state and trade a fresh ID
+  /// token for an updated backend session — the User document's
+  /// `isEmailVerified` flag flips on the next `/auth/me` read.
+  ///
+  /// Returns the latest [UserModel] when verification succeeded, or
+  /// `null` when the email is still pending verification.
+  Future<UserModel?> refreshEmailVerifiedStatus() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    await user.reload();
+    final fresh = FirebaseAuth.instance.currentUser;
+    if (fresh == null || !fresh.emailVerified) return null;
+
+    // Force-refresh the ID token so it carries the new email_verified
+    // claim, then exchange it for an updated backend JWT.
+    final idToken = await fresh.getIdToken(true);
+    if (idToken == null || idToken.isEmpty) return null;
+
+    final body = await _api.post(
+      'auth/firebase',
+      auth: false,
+      body: {'idToken': idToken},
+    );
+    return _persistAuth(body);
+  }
+
+  /// Backend pre-flight for forgot-password: returns true when the email
+  /// is registered with our Firebase project. Firebase's enumeration
+  /// protection silently swallows reset requests for unknown emails, so
+  /// without this check the user sees "Check your inbox" but no email
+  /// arrives. Throws on transport/server errors so callers can show a
+  /// retry message rather than a misleading "no account found".
+  Future<bool> checkEmailExists(String email) async {
+    final body = await _api.post(
+      'auth/check-email-exists',
+      auth: false,
+      body: {'email': email.trim().toLowerCase()},
+    );
+    final data = body is Map<String, dynamic> ? body['data'] : null;
+    if (data is Map<String, dynamic> && data['exists'] is bool) {
+      return data['exists'] as bool;
+    }
+    throw 'Unexpected response from email check.';
   }
 
   Future<void> signOut() => logout();

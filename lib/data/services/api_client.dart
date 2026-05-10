@@ -146,25 +146,45 @@ class ApiClient {
   Future<dynamic> uploadFile(
     String path, {
     required String field,
-    required String filePath,
+    String? filePath,
+    List<int>? bytes,
+    String? filename,
+    Map<String, String>? fields,
     String method = 'POST',
     String? contentType,
     bool auth = true,
   }) {
+    assert(
+      filePath != null || bytes != null,
+      'uploadFile needs either filePath or bytes',
+    );
     return _send(
       (token) async {
         final req = http.MultipartRequest(method, _uri(path));
         if (auth && token.isNotEmpty) {
           req.headers['Authorization'] = 'Bearer $token';
         }
-        req.files.add(
-          await http.MultipartFile.fromPath(
-            field,
-            filePath,
-            contentType:
-                contentType != null ? MediaType.parse(contentType) : null,
-          ),
-        );
+        if (fields != null) req.fields.addAll(fields);
+        if (filePath != null) {
+          req.files.add(
+            await http.MultipartFile.fromPath(
+              field,
+              filePath,
+              contentType:
+                  contentType != null ? MediaType.parse(contentType) : null,
+            ),
+          );
+        } else {
+          req.files.add(
+            http.MultipartFile.fromBytes(
+              field,
+              bytes!,
+              filename: filename,
+              contentType:
+                  contentType != null ? MediaType.parse(contentType) : null,
+            ),
+          );
+        }
         final streamed = await _http.send(req);
         return http.Response.fromStream(streamed);
       },

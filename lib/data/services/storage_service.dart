@@ -119,4 +119,17 @@ class StorageService {
         _prefs?.getStringList(AppConstants.keyAlertedHighMatchJobIds) ?? const [];
     return raw.toSet();
   }
+
+  /// Persistent flag — set to true the first time the user reaches the
+  /// end of the seeker onboarding wizard (finish OR skip). The role-
+  /// switch flow reads this to avoid re-asking "Make it yours" every
+  /// time the user comes back to seeker mode after a hirer detour.
+  static Future<void> setSeekerOnboardingSeen() async {
+    await init();
+    await _prefs!.setBool(AppConstants.keySeekerOnboardingSeen, true);
+  }
+
+  static bool hasSeekerOnboardingSeen() {
+    return _prefs?.getBool(AppConstants.keySeekerOnboardingSeen) ?? false;
+  }
 }

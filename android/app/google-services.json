@@ -12,7 +12,28 @@
           "package_name": "com.vinoth.jobhunter"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "309121341037-5o36mrf50ae8kslf5qp9m970h185hkjr.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.vinoth.jobhunter",
+            "certificate_hash": "a651bbf6d899afd907a7e6775730d3e0e006731d"
+          }
+        },
+        {
+          "client_id": "309121341037-gobbr1p9gktnrva7d0eln29eripfqejs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.vinoth.jobhunter",
+            "certificate_hash": "dc9bb0c631bdf361603e89a1151a2fe836f60cb9"
+          }
+        },
+        {
+          "client_id": "309121341037-jvjq5gdooel5ojc41vb8h8ineupe8olb.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyDwAOFGH1y_sG4QH645JFMnVW4HDlJ7QZs"
@@ -20,7 +41,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "309121341037-jvjq5gdooel5ojc41vb8h8ineupe8olb.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

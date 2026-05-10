@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../core/utils/app_snackbar.dart';
 import '../../data/models/job_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/job_provider.dart';
+import '../auth/email_verification_banner.dart';
 import 'hirer_main_navigation_screen.dart';
 import 'main_navigation_screen.dart';
 
@@ -92,8 +94,29 @@ class _RoleAwareMainScreenState extends State<RoleAwareMainScreen> {
   @override
   Widget build(BuildContext context) {
     final isHirer = context.select<AuthProvider, bool>((a) => a.isHirerMode);
-    return isHirer
+    final shell = isHirer
         ? const HirerMainNavigationScreen()
         : const MainNavigationScreen();
+
+    // Stack the verification banner ABOVE the navigation shell (not
+    // overlaid on top of it) so it pushes the AppBar down instead of
+    // covering the logo and greeting. The shared top SafeArea is
+    // consumed here so neither the banner nor the shell's own SafeArea
+    // double-pads the status-bar inset. Scaffold supplies a theme-aware
+    // background so the status-bar strip blends with the app's surface
+    // instead of falling through to the underlying black canvas.
+    return Scaffold(
+      backgroundColor: context.gradientTop,
+      body: SafeArea(
+        top: true,
+        bottom: false,
+        child: Column(
+          children: [
+            const EmailVerificationBanner(),
+            Expanded(child: shell),
+          ],
+        ),
+      ),
+    );
   }
 }

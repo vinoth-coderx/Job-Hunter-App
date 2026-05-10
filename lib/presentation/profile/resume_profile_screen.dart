@@ -27,7 +27,13 @@ class _ResumeProfileScreenState extends State<ResumeProfileScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final user = context.read<AuthProvider>().user;
-      context.read<ResumeProfileProvider>().seedFromUserIfEmpty(user);
+      final provider = context.read<ResumeProfileProvider>();
+      provider.seedFromUserIfEmpty(user);
+      // Pull resume meta + parsed structured fields from the backend so
+      // the "My Resume" card and the section auto-fill survive a fresh
+      // install / device switch where local storage was wiped.
+      // Fire-and-forget — provider notifies listeners as it lands.
+      provider.syncFromBackend();
     });
   }
 

@@ -2,6 +2,34 @@ import '../models/application_model.dart';
 import '../models/job_model.dart';
 import 'api_client.dart';
 
+/// Result scope returned by `POST /jobs/ai-search`. The backend
+/// cascades through these widening filters when the primary one
+/// produces zero hits — exposed so the UI can warn the user when
+/// they're seeing stale data instead of a fresh match.
+enum SearchScope { primary, extended, archived, empty }
+
+extension SearchScopeX on SearchScope {
+  static SearchScope fromString(String? raw) {
+    switch (raw) {
+      case 'extended':
+        return SearchScope.extended;
+      case 'archived':
+        return SearchScope.archived;
+      case 'empty':
+        return SearchScope.empty;
+      case 'primary':
+      default:
+        return SearchScope.primary;
+    }
+  }
+}
+
+class AiSearchResponse {
+  final List<Job> jobs;
+  final SearchScope scope;
+  const AiSearchResponse({required this.jobs, required this.scope});
+}
+
 /// One page of `/jobs/matched`. `hasMore=true` means another `page+1`
 /// fetch is worth attempting; `false` means the caller should stop
 /// listening for scroll-end triggers.
@@ -115,7 +143,11 @@ class JobService {
   /// Returns jobs ranked by multi-field relevance across title, skills,
   /// description, responsibilities and company. Already-applied jobs are
   /// excluded by default so they don't pollute discovery.
-  Future<List<Job>> aiSearchJobs({
+  ///
+  /// The backend cascades through three filter scopes when results are
+  /// sparse — the [SearchScope] that was returned is exposed so the UI
+  /// can warn the user when they're seeing stale or archived listings.
+  Future<AiSearchResponse> aiSearchJobs({
     required String query,
     int limit = 30,
     bool excludeAppliedJobs = true,
@@ -125,9 +157,19 @@ class JobService {
       'limit': limit,
       'excludeAppliedJobs': excludeAppliedJobs,
     });
-    return ApiClient.unwrapList(raw)
+
+    final jobs = ApiClient.unwrapList(raw)
         .map((e) => Job.fromApiJson(e as Map<String, dynamic>))
         .toList();
+
+    SearchScope scope = SearchScope.primary;
+    if (raw is Map<String, dynamic>) {
+      final meta = raw['meta'];
+      if (meta is Map<String, dynamic>) {
+        scope = SearchScopeX.fromString(meta['scope'] as String?);
+      }
+    }
+    return AiSearchResponse(jobs: jobs, scope: scope);
   }
 
   Future<Job?> getJobById(String id) async {

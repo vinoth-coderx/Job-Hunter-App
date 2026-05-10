@@ -124,6 +124,29 @@ class Conversation {
       participants.length == 1 && participants.first.id == myUserId;
 }
 
+class ChatFileAttachment {
+  final String url;
+  final String filename;
+  final int sizeBytes;
+  final String type;
+  const ChatFileAttachment({
+    required this.url,
+    required this.filename,
+    required this.sizeBytes,
+    required this.type,
+  });
+
+  bool get isImage => type.startsWith('image/');
+
+  factory ChatFileAttachment.fromJson(Map<String, dynamic> j) =>
+      ChatFileAttachment(
+        url: (j['url'] ?? '').toString(),
+        filename: (j['filename'] ?? '').toString(),
+        sizeBytes: (j['sizeBytes'] as num?)?.toInt() ?? 0,
+        type: (j['type'] ?? '').toString(),
+      );
+}
+
 class ChatMessage {
   final String id;
   final String conversationId;
@@ -131,6 +154,7 @@ class ChatMessage {
   final String receiverId;
   final String type;
   final String content;
+  final ChatFileAttachment? file;
   final bool isRead;
   final DateTime? readAt;
   final DateTime sentAt;
@@ -142,23 +166,30 @@ class ChatMessage {
     required this.receiverId,
     required this.type,
     required this.content,
+    this.file,
     this.isRead = false,
     this.readAt,
     required this.sentAt,
   });
 
-  factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-        id: (j['_id'] ?? j['id'] ?? '').toString(),
-        conversationId: (j['conversation'] ?? '').toString(),
-        senderId: (j['sender'] ?? '').toString(),
-        receiverId: (j['receiver'] ?? '').toString(),
-        type: (j['type'] ?? 'text').toString(),
-        content: (j['content'] ?? '').toString(),
-        isRead: j['isRead'] as bool? ?? false,
-        readAt: j['readAt'] == null
-            ? null
-            : DateTime.tryParse(j['readAt'].toString()),
-        sentAt: DateTime.tryParse(j['sentAt']?.toString() ?? '') ??
-            DateTime.now(),
-      );
+  factory ChatMessage.fromJson(Map<String, dynamic> j) {
+    final rawFile = j['file'];
+    return ChatMessage(
+      id: (j['_id'] ?? j['id'] ?? '').toString(),
+      conversationId: (j['conversation'] ?? '').toString(),
+      senderId: (j['sender'] ?? '').toString(),
+      receiverId: (j['receiver'] ?? '').toString(),
+      type: (j['type'] ?? 'text').toString(),
+      content: (j['content'] ?? '').toString(),
+      file: rawFile is Map<String, dynamic> && (rawFile['url'] ?? '').toString().isNotEmpty
+          ? ChatFileAttachment.fromJson(rawFile)
+          : null,
+      isRead: j['isRead'] as bool? ?? false,
+      readAt: j['readAt'] == null
+          ? null
+          : DateTime.tryParse(j['readAt'].toString()),
+      sentAt: DateTime.tryParse(j['sentAt']?.toString() ?? '') ??
+          DateTime.now(),
+    );
+  }
 }

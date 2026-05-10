@@ -3,6 +3,9 @@ class AppRoutes {
 
   static const String splash = '/';
   static const String login = '/login';
+  static const String emailAuth = '/email-auth';
+  static const String forgotPassword = '/forgot-password';
+  static const String rolePicker = '/role-picker';
   static const String onboarding = '/onboarding';
   static const String main = '/main';
   static const String search = '/search';

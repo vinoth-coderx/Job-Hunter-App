@@ -28,46 +28,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
-  /// Toggle the active role. The wrapper screen listens to AuthProvider
-  /// so the swap happens in-place without needing a route push.
-  /// First-time hirers (no company profile yet) are routed through
-  /// company setup before the switch is committed. On success we show
-  /// the [RoleSwitchSplash] so the seeker registers the swap — without
-  /// it the layout silently flips, which felt like a glitch in user
-  /// testing.
+  /// Toggle the active role. All the work — the network call, the
+  /// "Make it yours" onboarding gate, and the company-setup bounce
+  /// for first-time hirers — lives inside [RoleSwitchSplash] now, so
+  /// this handler just hands off the target role and lets the splash
+  /// drive the transition end-to-end. The wrapper screen listens to
+  /// AuthProvider, so once the splash retires the new shell renders
+  /// in place without an extra route push.
   Future<void> _handleSwitchRole(
     BuildContext context,
     AuthProvider auth,
   ) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
     final target = auth.isHirerMode ? 'seeker' : 'hirer';
-    final r = await auth.switchRole(target);
-    if (!mounted) return;
-
-    if (r.ok) {
-      if (!context.mounted) return;
-      await RoleSwitchSplash.show(context, targetRole: target);
-      return;
-    }
-
-    if (r.needsHirerProfile) {
-      // Bounce through the setup flow; on success, retry the switch.
-      final created = await navigator.pushNamed(AppRoutes.hirerProfileSetup);
-      if (!mounted) return;
-      if (created == true) {
-        final retry = await auth.switchRole('hirer');
-        if (!mounted) return;
-        if (retry.ok && context.mounted) {
-          await RoleSwitchSplash.show(context, targetRole: 'hirer');
-        }
-      }
-      return;
-    }
-
-    messenger.showSnackBar(SnackBar(
-      content: Text(r.error ?? 'Could not switch role'),
-    ));
+    await RoleSwitchSplash.show(context, targetRole: target);
   }
 
   @override

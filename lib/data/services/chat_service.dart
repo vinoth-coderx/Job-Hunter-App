@@ -54,9 +54,25 @@ class ChatService {
 
   Future<ChatMessage> sendMessage({
     required String conversationId,
-    required String content,
+    String content = '',
     String type = 'text',
+    String? attachmentPath,
+    List<int>? attachmentBytes,
+    String? attachmentFilename,
+    String? attachmentContentType,
   }) async {
+    if (attachmentPath != null || attachmentBytes != null) {
+      final raw = await _api.uploadFile(
+        'conversations/$conversationId/messages',
+        field: 'file',
+        filePath: attachmentPath,
+        bytes: attachmentBytes,
+        filename: attachmentFilename,
+        contentType: attachmentContentType,
+        fields: {'content': content, 'type': 'file'},
+      );
+      return ChatMessage.fromJson(ApiClient.unwrapMap(raw));
+    }
     final raw = await _api.post(
       'conversations/$conversationId/messages',
       body: {'content': content, 'type': type},

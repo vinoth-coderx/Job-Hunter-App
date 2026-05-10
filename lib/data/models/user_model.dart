@@ -66,6 +66,7 @@ class UserModel {
   final List<String> preferredRemote;
   final int? expectedSalaryMin;
   final String? resumeText;
+  final bool isEmailVerified;
 
   const UserModel({
     required this.id,
@@ -90,6 +91,7 @@ class UserModel {
     this.preferredRemote = const [],
     this.expectedSalaryMin,
     this.resumeText,
+    this.isEmailVerified = false,
   });
 
   UserModel copyWith({
@@ -114,6 +116,7 @@ class UserModel {
     List<String>? preferredRemote,
     int? expectedSalaryMin,
     String? resumeText,
+    bool? isEmailVerified,
   }) {
     return UserModel(
       id: id,
@@ -138,6 +141,7 @@ class UserModel {
       preferredRemote: preferredRemote ?? this.preferredRemote,
       expectedSalaryMin: expectedSalaryMin ?? this.expectedSalaryMin,
       resumeText: resumeText ?? this.resumeText,
+      isEmailVerified: isEmailVerified ?? this.isEmailVerified,
     );
   }
 
@@ -164,6 +168,7 @@ class UserModel {
         'preferredRemote': preferredRemote,
         'expectedSalaryMin': expectedSalaryMin,
         'resumeText': resumeText,
+        'isEmailVerified': isEmailVerified,
       };
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
@@ -192,6 +197,7 @@ class UserModel {
             List<String>.from(json['preferredRemote'] ?? const []),
         expectedSalaryMin: json['expectedSalaryMin'] as int?,
         resumeText: json['resumeText'] as String?,
+        isEmailVerified: (json['isEmailVerified'] as bool?) ?? false,
       );
 
   /// Parses the API response shape from the Job Hunter backend, which uses
@@ -248,6 +254,7 @@ class UserModel {
           (json['expectedSalaryMin'] as num?)?.toInt(),
       resumeText: profile['resumeText'] as String? ??
           json['resumeText'] as String?,
+      isEmailVerified: (json['isEmailVerified'] as bool?) ?? false,
     );
   }
 

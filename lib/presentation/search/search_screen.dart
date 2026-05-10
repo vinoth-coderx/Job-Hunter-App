@@ -6,6 +6,7 @@ import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../data/services/job_service.dart' show SearchScope;
 import '../../data/services/search_history_service.dart';
 import '../../providers/job_provider.dart';
 import '../alerts/alerts_screen.dart' show AlertSearchArgs;
@@ -118,14 +119,30 @@ class _SearchScreenState extends State<SearchScreen> {
         savedAt: DateTime.now(),
       );
 
+  /// Don't fire AI search until the user has typed something meaningful
+  /// — single characters mostly produce noise and burn LLM tokens for
+  /// no benefit. Two chars matches conventions (e.g. "QA", "iOS").
+  static const int _minQueryLength = 2;
+
+  /// Debounce window — long enough to absorb a typing burst, short
+  /// enough that pausing to read the typed query doesn't feel laggy.
+  /// Was 250ms → was firing on every pause; 600ms cuts LLM calls by
+  /// ~3-5× without making the UX feel sluggish.
+  static const Duration _debounceWindow = Duration(milliseconds: 600);
+
   void _onSearchChanged(String _) {
     setState(() {}); // refresh empty-state vs results toggle
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), _runSearch);
+    _debounce = Timer(_debounceWindow, _runSearch);
   }
 
   void _runSearch() {
     if (!_hasQuery) return;
+    final typed = _searchController.text.trim();
+    // Short queries (< 2 chars) fall back to whatever filter chips are
+    // active — a single letter would otherwise waste an LLM call and
+    // get back a useless intent. Filters alone still trigger search.
+    if (typed.length < _minQueryLength && _activeFilters.isEmpty) return;
     // AI semantic search: the typed query and any filter chips fold into
     // a single natural-language string sent to /jobs/ai-search, where
     // Claude extracts intent and matches across title, skills,
@@ -466,6 +483,13 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
         ),
+        if (!provider.isLoading && _scopeBannerFor(provider.searchScope) != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: _scopeBannerFor(provider.searchScope)!,
+            ),
+          ),
         if (provider.isLoading)
           const SliverFillRemaining(
             hasScrollBody: false,
@@ -639,20 +663,95 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Widget _buildNoResults() {
+    final query = _searchController.text.trim();
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.search_off_rounded,
+                size: 80, color: context.textTertiary),
+            const SizedBox(height: 16),
+            Text('No jobs found', style: AppTextStyles.h4),
+            const SizedBox(height: 8),
+            Text(
+              query.isEmpty
+                  ? 'Try a different keyword or remove some filters'
+                  : 'We couldn\'t find anything for "$query".\n'
+                      'Try broader keywords (e.g. "developer" or "designer"), '
+                      'or check back in a few hours — we refresh listings every hour.',
+              style: AppTextStyles.bodyMedium
+                  .copyWith(color: context.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// When the backend cascades through to a looser scope, surface a
+  /// short banner so the user knows the matches aren't fresh. Returns
+  /// null for the primary scope (no banner needed) and for empty
+  /// results (the empty-state already explains itself).
+  Widget? _scopeBannerFor(SearchScope scope) {
+    final results = context.read<JobProvider>().searchResults;
+    if (results.isEmpty) return null;
+    switch (scope) {
+      case SearchScope.primary:
+        return null;
+      case SearchScope.extended:
+        return _ScopeBanner(
+          icon: Icons.access_time_rounded,
+          color: AppColors.warning,
+          message:
+              'No fresh matches — showing older listings that still fit your search.',
+        );
+      case SearchScope.archived:
+        return _ScopeBanner(
+          icon: Icons.archive_outlined,
+          color: AppColors.urgent,
+          message:
+              'Showing archived listings — these may no longer be accepting applications.',
+        );
+      case SearchScope.empty:
+        return null;
+    }
+  }
+}
+
+class _ScopeBanner extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String message;
+  const _ScopeBanner({
+    required this.icon,
+    required this.color,
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.search_off_rounded,
-              size: 80, color: context.textTertiary),
-          const SizedBox(height: 16),
-          Text('No jobs found', style: AppTextStyles.h4),
-          const SizedBox(height: 8),
-          Text(
-            'Try a different keyword or remove some filters',
-            style: AppTextStyles.bodyMedium
-                .copyWith(color: context.textSecondary),
-            textAlign: TextAlign.center,
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: AppTextStyles.bodySmall
+                  .copyWith(color: color, height: 1.35),
+            ),
           ),
         ],
       ),
@@ -694,7 +793,10 @@ class _BackButton extends StatelessWidget {
   }
 }
 
-class _SortFilterPill extends StatelessWidget {
+/// Floating pill that dims to a low opacity when idle so it doesn't
+/// compete with results, then becomes fully opaque on tap. After 3s
+/// without interaction — or a tap outside the pill — it fades back.
+class _SortFilterPill extends StatefulWidget {
   final int activeFilterCount;
   final VoidCallback onFilter;
   final VoidCallback onSort;
@@ -706,37 +808,80 @@ class _SortFilterPill extends StatelessWidget {
   });
 
   @override
+  State<_SortFilterPill> createState() => _SortFilterPillState();
+}
+
+class _SortFilterPillState extends State<_SortFilterPill> {
+  static const double _idleOpacity = 0.45;
+  static const Duration _idleAfter = Duration(seconds: 3);
+
+  bool _active = false;
+  Timer? _fadeTimer;
+
+  @override
+  void dispose() {
+    _fadeTimer?.cancel();
+    super.dispose();
+  }
+
+  void _activate() {
+    _fadeTimer?.cancel();
+    if (!_active) setState(() => _active = true);
+    _fadeTimer = Timer(_idleAfter, () {
+      if (mounted) setState(() => _active = false);
+    });
+  }
+
+  void _deactivate() {
+    _fadeTimer?.cancel();
+    if (_active) setState(() => _active = false);
+  }
+
+  void _handleTap(VoidCallback action) {
+    _activate();
+    action();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 50,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(
-        color: AppColors.navBackground,
-        borderRadius: BorderRadius.circular(50),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+    return TapRegion(
+      onTapOutside: (_) => _deactivate(),
+      child: AnimatedOpacity(
+        opacity: _active ? 1.0 : _idleOpacity,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        child: Container(
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(
+            color: AppColors.navBackground,
+            borderRadius: BorderRadius.circular(50),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.2),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _PillButton(
-            icon: Icons.tune_rounded,
-            label: 'Filter',
-            badgeCount: activeFilterCount,
-            onTap: onFilter,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _PillButton(
+                icon: Icons.tune_rounded,
+                label: 'Filter',
+                badgeCount: widget.activeFilterCount,
+                onTap: () => _handleTap(widget.onFilter),
+              ),
+              Container(width: 1, height: 24, color: Colors.white24),
+              _PillButton(
+                icon: Icons.swap_vert_rounded,
+                label: 'Sort',
+                onTap: () => _handleTap(widget.onSort),
+              ),
+            ],
           ),
-          Container(width: 1, height: 24, color: Colors.white24),
-          _PillButton(
-            icon: Icons.swap_vert_rounded,
-            label: 'Sort',
-            onTap: onSort,
-          ),
-        ],
+        ),
       ),
     );
   }

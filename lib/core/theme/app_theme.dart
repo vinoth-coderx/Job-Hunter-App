@@ -27,7 +27,20 @@ class AppTheme {
           titleTextStyle:
               AppTextStyles.h4.copyWith(color: AppColors.textPrimary),
           iconTheme: const IconThemeData(color: AppColors.textPrimary),
-          systemOverlayStyle: SystemUiOverlayStyle.dark,
+          // SystemUiOverlayStyle.dark sets statusBarColor: null, which lets
+          // Android paint its default opaque scrim (black) on top of our
+          // gradients. Spell out a transparent overlay AND disable the
+          // Q+ contrast scrim (*ContrastEnforced: false) so the gradient
+          // shows through edge-to-edge under the status bar.
+          systemOverlayStyle: const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.dark,
+            statusBarBrightness: Brightness.light,
+            systemStatusBarContrastEnforced: false,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarIconBrightness: Brightness.dark,
+            systemNavigationBarContrastEnforced: false,
+          ),
         ),
         textTheme: TextTheme(
           headlineLarge:
@@ -162,7 +175,18 @@ class AppTheme {
           titleTextStyle:
               AppTextStyles.h4.copyWith(color: AppColors.darkTextPrimary),
           iconTheme: const IconThemeData(color: AppColors.darkTextPrimary),
-          systemOverlayStyle: SystemUiOverlayStyle.light,
+          // Mirror of the light-mode override: explicit transparent
+          // status bar + disable the Q+ contrast scrim so dark-mode
+          // gradients render edge-to-edge instead of getting masked.
+          systemOverlayStyle: const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.light,
+            statusBarBrightness: Brightness.dark,
+            systemStatusBarContrastEnforced: false,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarIconBrightness: Brightness.light,
+            systemNavigationBarContrastEnforced: false,
+          ),
         ),
         textTheme: TextTheme(
           headlineLarge:

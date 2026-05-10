@@ -1,14 +1,21 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../data/services/storage_service.dart';
+import '../../providers/auth_provider.dart';
 import '../widgets/app_logo.dart';
 
-/// Brief, branded transition shown while the user toggles between
-/// seeker and hirer mode. Sits between the role-switch network call
-/// and the next shell paint so the swap feels intentional instead of
-/// a jarring screen flip.
+/// Branded transition shown while the user toggles between seeker and
+/// hirer mode. Owns the entire role-swap: kicks off `switchRole` on the
+/// auth provider, decides where to land based on what setup is missing
+/// (seeker onboarding wizard, hirer company-profile setup), then hands
+/// the navigator off to that destination — all without ever exposing
+/// the in-flight state to the user.
 ///
 /// The seeker variant keeps the original lightweight intro (orbiting
 /// rings + pulsing dots). The hirer variant is dressed up to read as
@@ -25,9 +32,19 @@ class RoleSwitchSplash extends StatefulWidget {
     this.holdDuration = const Duration(milliseconds: 1400),
   });
 
-  /// Convenience that shows the splash on top of the current navigator
-  /// then pops it after [holdDuration]. Returns when the splash has
-  /// retired so the caller can resume its post-switch work.
+  /// Mounts the splash and runs the role transition end-to-end. The
+  /// splash itself will:
+  ///   1. Kick off `auth.switchRole(targetRole)` while its entrance
+  ///      animation plays.
+  ///   2. Wait for *both* the visual hold and the network call to
+  ///      complete so the transition feels consistent regardless of
+  ///      backend latency.
+  ///   3. Decide the destination based on what setup is still missing,
+  ///      then either pop (back to /main, which re-renders under the
+  ///      new active role) or push the appropriate setup screen.
+  ///
+  /// Callers can `await` this to know when the transition is fully
+  /// settled — they don't need to call `switchRole` themselves.
   static Future<void> show(
     BuildContext context, {
     required String targetRole,
@@ -86,14 +103,74 @@ class _RoleSwitchSplashState extends State<RoleSwitchSplash>
       vsync: this,
       duration: widget.holdDuration,
     )..forward();
-    Future<void>.delayed(widget.holdDuration, _retire);
+    _orchestrate();
   }
 
-  Future<void> _retire() async {
+  /// Runs the role-swap network call + onboarding gate while the
+  /// splash plays. The visual hold and the network call run in
+  /// parallel, but routing waits for both — so a slow API doesn't
+  /// dump the user onto the destination before the splash is finished
+  /// and a fast API doesn't make the splash feel meaninglessly long.
+  Future<void> _orchestrate() async {
+    final auth = context.read<AuthProvider>();
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final holdComplete = Future<void>.delayed(widget.holdDuration);
+    // Cap the role-switch network call so a stalled backend (Render free
+    // tier cold-start, dropped connection, etc.) can't trap the user on
+    // the splash forever — surface a friendly error and back out instead.
+    final result = await auth
+        .switchRole(widget.targetRole)
+        .timeout(
+      const Duration(seconds: 20),
+      onTimeout: () {
+        debugPrint('[RoleSwitchSplash] switchRole timed out after 20s');
+        return (
+          ok: false,
+          needsHirerProfile: false,
+          error: 'Server is taking too long to respond. Please try again.',
+        );
+      },
+    );
+    await holdComplete;
     if (!mounted) return;
+
+    if (!result.ok) {
+      // Backend rejected the switch. Surface the cause and back out
+      // to wherever the caller pushed us from.
+      await _entry.reverse();
+      if (!mounted) return;
+      navigator.pop();
+      if (result.needsHirerProfile && widget.targetRole == 'hirer') {
+        // First-time hirer — bounce through company setup. The setup
+        // screen pops `true` on success; the toggle handler in
+        // profile_screen retries the transition so the user lands in
+        // hirer mode without seeing this splash twice.
+        navigator.pushNamed(AppRoutes.hirerProfileSetup);
+        return;
+      }
+      messenger.showSnackBar(SnackBar(
+        content: Text(result.error ?? 'Could not switch role'),
+      ));
+      return;
+    }
+
+    // Switch landed. For seeker we additionally gate on whether the
+    // onboarding wizard has ever been seen — fields-empty alone isn't
+    // enough, since users who skipped past the wizard once shouldn't
+    // be re-prompted on every future toggle back to seeker.
+    final needsOnboarding = widget.targetRole == 'seeker' &&
+        auth.needsOnboarding &&
+        !StorageService.hasSeekerOnboardingSeen();
+
     await _entry.reverse();
     if (!mounted) return;
-    Navigator.of(context).pop();
+    if (needsOnboarding) {
+      navigator.pushReplacementNamed(AppRoutes.onboarding);
+    } else {
+      navigator.pop();
+    }
   }
 
   @override
@@ -208,12 +285,6 @@ class _RoleSwitchSplashState extends State<RoleSwitchSplash>
                       ],
                     ),
                   ),
-                  Positioned(
-                    bottom: 24,
-                    left: 0,
-                    right: 0,
-                    child: Center(child: _SkipPill(onTap: _retire)),
-                  ),
                 ],
               ),
             ),
@@ -323,42 +394,9 @@ class _RoleSwitchSplashState extends State<RoleSwitchSplash>
                     ],
                   ),
                 ),
-                Positioned(
-                  bottom: 24,
-                  left: 0,
-                  right: 0,
-                  child: Center(child: _SkipPill(onTap: _retire)),
-                ),
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ───────────────────────── Shared bits ─────────────────────────
-
-class _SkipPill extends StatelessWidget {
-  final VoidCallback onTap;
-  const _SkipPill({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: onTap,
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.white.withValues(alpha: 0.9),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      ),
-      child: Text(
-        'Skip',
-        style: AppTextStyles.bodySmall.copyWith(
-          color: Colors.white.withValues(alpha: 0.8),
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.4,
         ),
       ),
     );

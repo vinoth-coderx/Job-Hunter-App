@@ -1,6 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../data/models/resume_profile_model.dart';
 import '../data/models/user_model.dart';
 import '../data/services/storage_service.dart';
@@ -35,6 +38,7 @@ class ResumeImportResult {
 class ResumeProfileProvider extends ChangeNotifier {
   ResumeProfile _profile = ResumeProfile.initial;
   bool _loaded = false;
+  bool _syncing = false;
 
   ResumeProfile get profile => _profile;
   bool get loaded => _loaded;
@@ -95,6 +99,108 @@ class ResumeProfileProvider extends ChangeNotifier {
     }
 
     if (changed) _persist(next);
+  }
+
+  /// Pull resume metadata + parsed fields from the backend on screen open.
+  ///
+  /// Two reasons this exists despite onboarding already calling
+  /// [importResume]:
+  ///   1. Local app storage can be wiped (reinstall, fresh device, "clear
+  ///      data") while the backend still holds the resume in Cloudinary —
+  ///      without this sync, the "My Resume" card would show empty even
+  ///      though the file is on the server.
+  ///   2. The Claude parse result is only ever applied to local state.
+  ///      If the parse failed at upload time but text-extraction
+  ///      succeeded server-side, opening this screen later gets a fresh
+  ///      shot at filling employments / educations / IT skills / projects
+  ///      / summary from the same stored resume text.
+  ///
+  /// Re-entry guarded — the screen can call this on every initState
+  /// without thrashing the network.
+  Future<void> syncFromBackend() async {
+    if (_syncing) return;
+    _syncing = true;
+    try {
+      final userService = UserService();
+
+      Map<String, dynamic>? meta;
+      try {
+        meta = await userService.getResumeMeta();
+      } catch (_) {
+        meta = null;
+      }
+      final fileMeta = meta?['file'];
+      if (fileMeta is! Map<String, dynamic>) return;
+
+      final originalName = (fileMeta['originalName'] as String? ?? '').trim();
+      final size = (fileMeta['size'] as num?)?.toInt() ?? 0;
+      final uploadedAtIso =
+          (fileMeta['uploadedAt'] as String? ?? '').trim();
+
+      // Sync local meta + downloaded copy when missing. We deliberately
+      // don't overwrite a fresher local copy — the picker flow writes the
+      // file to disk and updates these fields synchronously, so a sync
+      // racing alongside it should leave them alone.
+      if (_profile.resumeFileName.isEmpty && originalName.isNotEmpty) {
+        String formattedDate = '';
+        if (uploadedAtIso.isNotEmpty) {
+          try {
+            final dt = DateTime.parse(uploadedAtIso).toLocal();
+            formattedDate = DateFormat('MMM d, yyyy').format(dt);
+          } catch (_) {}
+        }
+
+        // Best-effort: download the file so the View button works. A
+        // failure here shouldn't block meta + auto-fill below.
+        String localPath = '';
+        try {
+          final bytes = await userService.downloadResume();
+          if (bytes.isNotEmpty) {
+            final docs = await getApplicationDocumentsDirectory();
+            final destDir = Directory('${docs.path}/resumes');
+            if (!destDir.existsSync()) destDir.createSync(recursive: true);
+            final stamp = DateTime.now().millisecondsSinceEpoch;
+            final safeName =
+                originalName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+            final dest = File('${destDir.path}/$stamp-$safeName');
+            await dest.writeAsBytes(bytes);
+            localPath = dest.path;
+          }
+        } catch (_) {}
+
+        await _persist(_profile.copyWith(
+          resumeFileName: originalName,
+          resumeFilePath: localPath,
+          resumeSizeBytes: size > 0 ? size : _profile.resumeSizeBytes,
+          resumeUploadedOn: formattedDate,
+        ));
+      }
+
+      // Trigger backend parse only when there's something to fill.
+      // applyParsedResume is itself idempotent — it only writes into
+      // empty fields — but skipping the network call when everything is
+      // already populated saves a Claude round-trip on every screen open.
+      final needsAutoFill = _profile.resumeHeadline.isEmpty ||
+          _profile.profileSummary.isEmpty ||
+          _profile.keySkills.isEmpty ||
+          _profile.employments.isEmpty ||
+          _profile.educations.isEmpty ||
+          _profile.itSkills.isEmpty ||
+          _profile.projects.isEmpty;
+      if (!needsAutoFill) return;
+
+      Map<String, dynamic>? parsed;
+      try {
+        parsed = await userService.parseResume();
+      } catch (_) {
+        parsed = null;
+      }
+      if (parsed != null && parsed.isNotEmpty) {
+        await applyParsedResume(parsed);
+      }
+    } finally {
+      _syncing = false;
+    }
   }
 
   /// Merge structured fields returned by the backend resume parser into
@@ -303,6 +409,37 @@ class ResumeProfileProvider extends ChangeNotifier {
       await userService.uploadResume(file);
     } catch (e) {
       return ResumeImportResult(ok: false, error: e.toString());
+    }
+
+    // Persist a local copy + meta so the "My Resume" card renders
+    // immediately after onboarding upload. The picker flow in
+    // resume_editors.dart updates these fields itself before reaching
+    // here, but onboarding calls us directly — without this, the card
+    // stayed empty until the next syncFromBackend round-trip.
+    try {
+      final originalName = file.path.split(Platform.pathSeparator).last;
+      final docs = await getApplicationDocumentsDirectory();
+      final destDir = Directory('${docs.path}/resumes');
+      if (!destDir.existsSync()) destDir.createSync(recursive: true);
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final safeName =
+          originalName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+      final dest = File('${destDir.path}/$stamp-$safeName');
+      // Skip the copy when the picker already wrote into our docs/resumes
+      // dir (the My-Profile flow does that itself).
+      final alreadyLocal = file.path.startsWith(destDir.path);
+      final stored = alreadyLocal ? file : await file.copy(dest.path);
+      final size = await stored.length();
+      final today = DateFormat('MMM d, yyyy').format(DateTime.now());
+      await _persist(_profile.copyWith(
+        resumeFileName: originalName,
+        resumeFilePath: stored.path,
+        resumeSizeBytes: size,
+        resumeUploadedOn: today,
+      ));
+    } catch (_) {
+      // Non-fatal — the upload itself succeeded and syncFromBackend will
+      // recover the meta on the next screen open.
     }
 
     Map<String, dynamic>? parsed;

@@ -8,8 +8,11 @@ import 'core/theme/app_theme.dart';
 import 'data/models/job_model.dart';
 import 'data/services/storage_service.dart';
 import 'presentation/alerts/alerts_screen.dart';
+import 'presentation/auth/email_auth_screen.dart';
+import 'presentation/auth/forgot_password_screen.dart';
 import 'presentation/auth/login_screen.dart';
 import 'presentation/auth/onboarding_screen.dart';
+import 'presentation/auth/role_picker_screen.dart';
 import 'presentation/auth/splash_screen.dart';
 import 'presentation/auto_apply/auto_apply_log_screen.dart';
 import 'presentation/auto_apply/auto_apply_review_screen.dart';
@@ -67,14 +70,20 @@ Future<void> main() async {
   // Draw behind the system bars so screens can go edge-to-edge.
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-  // Make status bar transparent so our gradient screens look correct
+  // Make status bar transparent so our gradient screens look correct.
+  // On Android Q+ the system applies a contrast scrim (visible as a
+  // solid black bar over the status / nav area) unless we explicitly
+  // opt out via *ContrastEnforced: false — without these flags the
+  // gradient gets masked even though statusBarColor is transparent.
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark,
       statusBarBrightness: Brightness.light,
+      systemStatusBarContrastEnforced: false,
       systemNavigationBarColor: Colors.transparent,
       systemNavigationBarIconBrightness: Brightness.dark,
+      systemNavigationBarContrastEnforced: false,
     ),
   );
 
@@ -130,6 +139,22 @@ class JobHunterApp extends StatelessWidget {
             case AppRoutes.login:
               return MaterialPageRoute(
                 builder: (_) => const LoginScreen(),
+              );
+            case AppRoutes.emailAuth:
+              final initialSignUp = settings.arguments == 'signup';
+              return MaterialPageRoute(
+                builder: (_) =>
+                    EmailAuthScreen(initialSignUp: initialSignUp),
+              );
+            case AppRoutes.forgotPassword:
+              final initialEmail = settings.arguments as String?;
+              return MaterialPageRoute(
+                builder: (_) =>
+                    ForgotPasswordScreen(initialEmail: initialEmail),
+              );
+            case AppRoutes.rolePicker:
+              return MaterialPageRoute(
+                builder: (_) => const RolePickerScreen(),
               );
             case AppRoutes.onboarding:
               return MaterialPageRoute(

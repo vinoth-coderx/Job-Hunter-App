@@ -67,9 +67,10 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted) return;
     final auth = context.read<AuthProvider>();
 
-    // Onboarding is shown only on the immediate post-Google-login flow
-    // inside LoginScreen — never re-prompted on subsequent app launches,
-    // even if the profile is still empty.
+    // Returning users (already signed in on a previous session) go
+    // straight to /main. Onboarding is only triggered from the fresh
+    // signup paths in login_screen / email_auth_screen — never from
+    // the resume-existing-session splash flow.
     if (auth.isAuthenticated || auth.isGuest) {
       Navigator.pushReplacementNamed(context, AppRoutes.main);
       return;

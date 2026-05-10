@@ -17,6 +17,7 @@ class JobProvider extends ChangeNotifier {
 
   List<Job> _jobs = [];
   List<Job> _searchResults = [];
+  SearchScope _searchScope = SearchScope.primary;
   List<JobApplication> _applications = [];
   final Set<String> _savedJobIds = {};
   bool _isLoading = false;
@@ -64,6 +65,7 @@ class JobProvider extends ChangeNotifier {
 
   List<Job> get jobs => _jobs;
   List<Job> get searchResults => _searchResults;
+  SearchScope get searchScope => _searchScope;
   List<JobApplication> get applications => _applications;
   Set<String> get savedJobIds => _savedJobIds;
   bool get isLoading => _isLoading;
@@ -375,15 +377,17 @@ class JobProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final results = await _jobService.aiSearchJobs(
+      final response = await _jobService.aiSearchJobs(
         query: trimmed,
         limit: limit,
       );
-      final deduped = _stripApplied(_dedupe(results));
+      final deduped = _stripApplied(_dedupe(response.jobs));
       _searchResults = sort == null ? deduped : _applySort(deduped, sort);
+      _searchScope = response.scope;
     } catch (e) {
       _error = _formatError(e);
       _searchResults = [];
+      _searchScope = SearchScope.empty;
     } finally {
       _isLoading = false;
       notifyListeners();

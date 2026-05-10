@@ -25,7 +25,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final ok = await auth.signInWithGoogle();
     if (!mounted) return;
     if (ok) {
-      Navigator.pushReplacementNamed(context, AppRoutes.main);
+      // Firebase reports `additionalUserInfo.isNewUser` only on the
+      // sign-in that actually created the account, so this is the
+      // single moment we route a Google user to the role picker.
+      final dest = auth.lastSignInIsNewUser
+          ? AppRoutes.rolePicker
+          : AppRoutes.main;
+      Navigator.pushReplacementNamed(context, dest);
     } else {
       setState(() => _errorMsg = auth.error ?? 'Google sign-in failed');
     }
@@ -37,6 +43,15 @@ class _LoginScreenState extends State<LoginScreen> {
     await auth.enterGuestMode();
     if (!mounted) return;
     Navigator.pushReplacementNamed(context, AppRoutes.main);
+  }
+
+  void _openEmailAuth({required bool signUp}) {
+    setState(() => _errorMsg = null);
+    Navigator.pushNamed(
+      context,
+      AppRoutes.emailAuth,
+      arguments: signUp ? 'signup' : 'signin',
+    );
   }
 
   @override
@@ -125,7 +140,27 @@ class _LoginScreenState extends State<LoginScreen> {
                   onPressed: loading ? null : _handleGoogleLogin,
                   isLoading: loading,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
+                _EmailSignInButton(
+                  onPressed:
+                      loading ? null : () => _openEmailAuth(signUp: false),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.center,
+                  child: TextButton(
+                    onPressed:
+                        loading ? null : () => _openEmailAuth(signUp: true),
+                    child: Text(
+                      'Create an account',
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 const _OrDivider(),
                 const SizedBox(height: 20),
                 _GuestButton(
@@ -291,6 +326,44 @@ class _GoogleSignInButton extends StatelessWidget {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+class _EmailSignInButton extends StatelessWidget {
+  final VoidCallback? onPressed;
+  const _EmailSignInButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size.fromHeight(56),
+          side: BorderSide(color: context.divider, width: 1.4),
+          foregroundColor: context.textPrimary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.alternate_email_rounded,
+                size: 20, color: context.textPrimary),
+            const SizedBox(width: 12),
+            Text(
+              'Continue with Email',
+              style: AppTextStyles.bodyMedium.copyWith(
+                fontWeight: FontWeight.w600,
+                color: context.textPrimary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

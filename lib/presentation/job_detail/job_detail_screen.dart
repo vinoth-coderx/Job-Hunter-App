@@ -171,7 +171,10 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       context: context,
       barrierDismissible: false,
       barrierLabel: 'Application tracked',
-      barrierColor: Colors.black.withValues(alpha: 0.72),
+      // Dialog paints its own animated radial-gradient backdrop, so the
+      // route barrier is fully transparent — otherwise the gradient
+      // washes through a flat black tint.
+      barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (_, __, ___) => _ApplySuccessDialog(
         company: _job.company,
@@ -350,8 +353,10 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                                 _DeadlineBadge(
                                     deadline: _job.applicationDeadline!),
                               ],
-                              const SizedBox(height: 20),
-                              _StatHero(job: _job),
+                              if (_hasStatHero) ...[
+                                const SizedBox(height: 20),
+                                _StatHero(job: _job),
+                              ],
                               if (_job.matchScore != null) ...[
                                 const SizedBox(height: 20),
                                 _MatchSummary(job: _job),
@@ -480,7 +485,10 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   bool get _hasInfoRow =>
       _job.employmentType.isNotEmpty ||
       _job.remoteType.isNotEmpty ||
-      _job.postedTime.isNotEmpty;
+      (_job.openingsCount != null && _job.openingsCount! > 0);
+
+  bool get _hasStatHero =>
+      _job.salary.isNotEmpty || _job.experience.isNotEmpty;
 
   /// Renders the "Recruiter contact" section if the job description
   /// includes an email address or phone number. Returns an empty list
@@ -714,14 +722,14 @@ class _ApplySuccessDialogState extends State<_ApplySuccessDialog>
       if (mounted) HapticFeedback.mediumImpact();
     });
 
-    _pieces = _ConfettiPiece.generate(count: 40);
+    _pieces = _ConfettiPiece.generate(count: 70);
 
     _c = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1800),
-      // Reverse runs 2.5× faster than entry — exit should feel snappy
+      duration: const Duration(milliseconds: 2000),
+      // Reverse runs ~2.7× faster than entry — exit should feel snappy
       // but still play the inverse stagger so the dialog never snaps shut.
-      reverseDuration: const Duration(milliseconds: 720),
+      reverseDuration: const Duration(milliseconds: 740),
     );
     _c.addListener(() {
       if (_c.value > _burstSeen.value) _burstSeen.value = _c.value;
@@ -768,62 +776,99 @@ class _ApplySuccessDialogState extends State<_ApplySuccessDialog>
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Stack(
-        children: [
-          // Confetti spans the full screen so pieces can fly past the
-          // edge of the centered text/button — RepaintBoundary keeps
-          // the per-frame canvas redraw isolated from the rest.
-          Positioned.fill(
-            child: IgnorePointer(
-              child: RepaintBoundary(
-                child: AnimatedBuilder(
-                  animation: _burstSeen,
-                  builder: (_, __) => CustomPaint(
-                    painter: _ConfettiPainter(
-                      pieces: _pieces,
-                      t: _burstSeen.value,
+    return Stack(
+      children: [
+        // Animated radial-gradient backdrop — fades in deep emerald that
+        // washes outward from where the icon will land, then settles to
+        // a near-black halo. Replaces the flat black barrier and makes
+        // the celebration feel intentional rather than tacked-on.
+        Positioned.fill(
+          child: AnimatedBuilder(
+            animation: _c,
+            builder: (_, __) {
+              final t = Curves.easeOutCubic.transform(_c.value.clamp(0.0, 1.0));
+              return DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.center,
+                    radius: 0.95,
+                    colors: [
+                      Color.lerp(const Color(0xFF064E3B),
+                          const Color(0xFF065F46), t)!,
+                      Color.lerp(const Color(0xFF111827),
+                          const Color(0xFF0B1220), t)!,
+                    ],
+                    stops: const [0.0, 1.0],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        SafeArea(
+          child: Stack(
+            children: [
+              // Three concentric ring waves expanding from the icon —
+              // Apple-Pay-style "tap accepted" affordance. Painted in a
+              // separate layer so the rings sit *behind* the badge while
+              // the confetti burst flies *in front*.
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: RepaintBoundary(
+                    child: AnimatedBuilder(
+                      animation: _c,
+                      builder: (_, __) => CustomPaint(
+                        painter: _RingWavePainter(t: _c.value),
+                        size: Size.infinite,
+                      ),
                     ),
-                    size: Size.infinite,
                   ),
                 ),
               ),
-            ),
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedBuilder(
-                    animation: _iconScale,
-                    builder: (_, child) => Transform.scale(
-                      scale: _iconScale.value,
-                      child: child,
-                    ),
-                    child: Container(
-                      width: 112,
-                      height: 112,
-                      decoration: BoxDecoration(
-                        color: context.surface,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.success.withValues(alpha: 0.55),
-                            blurRadius: 40,
-                            spreadRadius: 6,
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.check_rounded,
-                        color: AppColors.success,
-                        size: 64,
+              // Confetti spans the full screen so pieces can fly past the
+              // edge of the centered text/button — RepaintBoundary keeps
+              // the per-frame canvas redraw isolated from the rest.
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: RepaintBoundary(
+                    child: AnimatedBuilder(
+                      animation: _burstSeen,
+                      builder: (_, __) => CustomPaint(
+                        painter: _ConfettiPainter(
+                          pieces: _pieces,
+                          t: _burstSeen.value,
+                        ),
+                        size: Size.infinite,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 26),
+                ),
+              ),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedBuilder(
+                        animation: _c,
+                        builder: (_, __) {
+                          // Gentle continuous breathe on the badge halo
+                          // after entry — keeps the moment alive instead
+                          // of going static after the elastic settle.
+                          final breathe = _c.value > 0.5
+                              ? 1 +
+                                  0.04 *
+                                      math.sin(
+                                          (_c.value - 0.5) * math.pi * 4)
+                              : 1.0;
+                          return Transform.scale(
+                            scale: _iconScale.value * breathe,
+                            child: _CheckBadge(progress: _c),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 26),
                   _SlideFade(
                     t: _titleT,
                     child: Text(
@@ -848,25 +893,149 @@ class _ApplySuccessDialogState extends State<_ApplySuccessDialog>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 32),
-                  _SlideFade(
-                    t: _btnT,
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: PrimaryButton(
-                        label: 'Keep hunting',
-                        onPressed: _handleDone,
+                      const SizedBox(height: 32),
+                      _SlideFade(
+                        t: _btnT,
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: PrimaryButton(
+                            label: 'Keep hunting',
+                            onPressed: _handleDone,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
+}
+
+/// Animated checkmark badge — circular surface with a stroke-drawn tick
+/// that paints itself onto the canvas progressively. Looks far more
+/// "alive" than dropping a pre-rendered Icon, and fades out cleanly on
+/// reverse because the painter only reads `progress.value`.
+class _CheckBadge extends StatelessWidget {
+  final Animation<double> progress;
+  const _CheckBadge({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: progress,
+      builder: (_, __) {
+        // Stroke draws between t=0.18 and t=0.55 — starts a beat after
+        // the elastic pop begins so the user sees the badge land first,
+        // then the tick "writes" inside it.
+        final raw = ((progress.value - 0.18) / (0.55 - 0.18)).clamp(0.0, 1.0);
+        final strokeT = Curves.easeOutCubic.transform(raw);
+        return Container(
+          width: 116,
+          height: 116,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.success.withValues(alpha: 0.55),
+                blurRadius: 44,
+                spreadRadius: 8,
+              ),
+              BoxShadow(
+                color: AppColors.success.withValues(alpha: 0.25),
+                blurRadius: 80,
+                spreadRadius: 24,
+              ),
+            ],
+          ),
+          child: CustomPaint(
+            painter: _CheckStrokePainter(t: strokeT),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CheckStrokePainter extends CustomPainter {
+  final double t;
+  _CheckStrokePainter({required this.t});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (t == 0) return;
+    final w = size.width;
+    final h = size.height;
+    // Tick polyline calibrated against a 116×116 badge — the values
+    // below are normalised so it scales cleanly on smaller devices.
+    final p1 = Offset(w * 0.30, h * 0.52);
+    final p2 = Offset(w * 0.46, h * 0.66);
+    final p3 = Offset(w * 0.74, h * 0.40);
+
+    final firstLeg = (p2 - p1).distance;
+    final secondLeg = (p3 - p2).distance;
+    final total = firstLeg + secondLeg;
+    final drawn = total * t;
+
+    final path = Path()..moveTo(p1.dx, p1.dy);
+    if (drawn <= firstLeg) {
+      final f = drawn / firstLeg;
+      path.lineTo(p1.dx + (p2.dx - p1.dx) * f, p1.dy + (p2.dy - p1.dy) * f);
+    } else {
+      path.lineTo(p2.dx, p2.dy);
+      final f = ((drawn - firstLeg) / secondLeg).clamp(0.0, 1.0);
+      path.lineTo(p2.dx + (p3.dx - p2.dx) * f, p2.dy + (p3.dy - p2.dy) * f);
+    }
+
+    final paint = Paint()
+      ..color = AppColors.success
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 9
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CheckStrokePainter old) => old.t != t;
+}
+
+/// Three concentric ring waves that expand from the centre and fade out —
+/// reads as "tap accepted, energy radiating outward". Each ring is
+/// staggered so they chase each other instead of all firing at once.
+class _RingWavePainter extends CustomPainter {
+  final double t;
+  _RingWavePainter({required this.t});
+
+  static const _ringStarts = [0.05, 0.18, 0.32];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (t == 0) return;
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final maxR = math.max(size.width, size.height) * 0.65;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    for (final start in _ringStarts) {
+      final raw = ((t - start) / 0.55).clamp(0.0, 1.0);
+      if (raw == 0) continue;
+      final eased = Curves.easeOutCubic.transform(raw);
+      final radius = 60 + eased * maxR;
+      final alpha = (1 - raw).clamp(0.0, 1.0) * 0.55;
+      paint.color = AppColors.success.withValues(alpha: alpha);
+      canvas.drawCircle(Offset(cx, cy), radius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingWavePainter old) => old.t != t;
 }
 
 /// One piece of confetti. Position is computed at paint-time from
@@ -1009,14 +1178,14 @@ class _Header extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             // Logo plate — subtle gradient border + drop shadow so the
             // company mark feels presented rather than sitting flat.
             Container(
               padding: const EdgeInsets.all(2),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(16),
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -1034,11 +1203,11 @@ class _Header extends StatelessWidget {
                 ],
               ),
               child: Container(
-                width: 76,
-                height: 76,
+                width: 56,
+                height: 56,
                 decoration: BoxDecoration(
                   color: context.surface,
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(14),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: job.companyLogo.isEmpty
@@ -1055,6 +1224,7 @@ class _Header extends StatelessWidget {
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   if (job.isNative) ...[
                     Container(
@@ -1396,8 +1566,6 @@ class _StatHero extends StatelessWidget {
     // tile entirely is cleaner.
     final showSalary = job.salary.isNotEmpty;
     final showExperience = job.experience.isNotEmpty;
-    final showOpenings =
-        job.openingsCount != null && job.openingsCount! > 0;
     final tiles = <Widget>[
       if (showSalary)
         _HeroStat(
@@ -1410,12 +1578,6 @@ class _StatHero extends StatelessWidget {
           icon: Icons.workspace_premium_rounded,
           label: 'Experience',
           value: job.experience,
-        ),
-      if (showOpenings)
-        _HeroStat(
-          icon: Icons.groups_rounded,
-          label: 'Openings',
-          value: '${job.openingsCount}',
         ),
     ];
     if (tiles.isEmpty) return const SizedBox.shrink();
@@ -1538,10 +1700,11 @@ class _InfoChips extends StatelessWidget {
         label: _capitalize(job.remoteType),
       ));
     }
-    if (job.postedTime.isNotEmpty) {
+    if (job.openingsCount != null && job.openingsCount! > 0) {
       chips.add(_InfoPill(
-        icon: Icons.schedule_rounded,
-        label: job.postedTime,
+        icon: Icons.groups_rounded,
+        label:
+            '${job.openingsCount} ${job.openingsCount == 1 ? 'opening' : 'openings'}',
       ));
     }
     return Wrap(
@@ -1996,68 +2159,18 @@ class _SoftChip extends StatelessWidget {
   }
 }
 
-/// "About this role" body that collapses long descriptions to ~10
-/// lines with a "Show more" toggle. Short descriptions skip the toggle
-/// entirely so the layout doesn't show a useless link.
-class _ExpandableText extends StatefulWidget {
+class _ExpandableText extends StatelessWidget {
   final String text;
   const _ExpandableText({required this.text});
 
   @override
-  State<_ExpandableText> createState() => _ExpandableTextState();
-}
-
-class _ExpandableTextState extends State<_ExpandableText> {
-  bool _expanded = false;
-  // Heuristic threshold: ~600 chars roughly maps to >10 lines on a
-  // typical phone — tuned by eye, not a measured layout.
-  static const int _collapseAt = 600;
-
-  @override
   Widget build(BuildContext context) {
-    final long = widget.text.length > _collapseAt;
-    final shown = (!long || _expanded)
-        ? widget.text
-        : '${widget.text.substring(0, _collapseAt).trimRight()}…';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          shown,
-          style: AppTextStyles.bodyMedium.copyWith(
-            color: context.textSecondary,
-            height: 1.65,
-          ),
-        ),
-        if (long) ...[
-          const SizedBox(height: 8),
-          InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Text(
-                    _expanded ? 'Show less' : 'Show more',
-                    style: AppTextStyles.labelSmall.copyWith(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    _expanded
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
-                    size: 16,
-                    color: AppColors.primary,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ],
+    return Text(
+      text,
+      style: AppTextStyles.bodyMedium.copyWith(
+        color: context.textSecondary,
+        height: 1.65,
+      ),
     );
   }
 }

@@ -1,15 +1,16 @@
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/models/conversation_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../widgets/app_avatar.dart';
+import 'chat_attachment_viewer.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -25,6 +26,34 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = true;
   Timer? _typingDebounce;
   bool _typingSent = false;
+  // Tracks the last-rendered message count so we can detect "a new
+  // message just arrived" inside build() and auto-scroll to it (covers
+  // socket-pushed inbound messages, not just the user's own send).
+  int _lastMsgCount = 0;
+
+  // True from the moment the user picks an attachment until the multipart
+  // POST completes (success or failure). Drives the composer's spinner +
+  // disabled-button state so the user knows the file is on its way and
+  // can't double-tap to send the same image twice.
+  bool _uploading = false;
+
+  // Friendly date headings — "Today", "Yesterday", weekday name within
+  // the last week, otherwise the full date. Mirrors WhatsApp.
+  String _formatDateHeading(DateTime when) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final that = DateTime(when.year, when.month, when.day);
+    final diffDays = today.difference(that).inDays;
+    if (diffDays == 0) return 'Today';
+    if (diffDays == 1) return 'Yesterday';
+    if (diffDays > 1 && diffDays < 7) {
+      return DateFormat('EEEE').format(when.toLocal());
+    }
+    if (now.year == when.year) {
+      return DateFormat('EEE, d MMM').format(when.toLocal());
+    }
+    return DateFormat('d MMM yyyy').format(when.toLocal());
+  }
 
   @override
   void initState() {
@@ -35,13 +64,36 @@ class _ChatScreenState extends State<ChatScreen> {
       await prov.markConversationRead(widget.conversationId);
       if (!mounted) return;
       setState(() => _loading = false);
-      _jumpToBottom();
+      // Jump must wait for the post-setState frame — only then is the
+      // ListView mounted and the ScrollController attached to a Scrollable
+      // (otherwise hasClients is false and jumpTo silently no-ops).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _jumpToBottom();
+      });
     });
   }
 
   void _jumpToBottom() {
     if (!_scroll.hasClients) return;
     _scroll.jumpTo(_scroll.position.maxScrollExtent);
+  }
+
+  // Smooth follow-along when an inbound message lands while the user is
+  // already at (or near) the bottom — same UX rule as WhatsApp: don't
+  // yank the view if they've scrolled up to read history.
+  void _animateToBottom() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      _scroll.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  bool _isNearBottom() {
+    if (!_scroll.hasClients) return true;
+    final pos = _scroll.position;
+    return (pos.maxScrollExtent - pos.pixels) < 160;
   }
 
   Conversation? _conv() {
@@ -84,6 +136,97 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+  }
+
+  // Server-side cap is 10MB (uploadChatAttachment middleware). Mirror it
+  // client-side so the user gets immediate feedback instead of waiting
+  // for the multipart upload to fail with a 413.
+  static const int _maxAttachmentBytes = 10 * 1024 * 1024;
+
+  Future<void> _pickAndSendAttachment() async {
+    if (_uploading) return;
+    final messenger = ScaffoldMessenger.of(context);
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const [
+          'jpg', 'jpeg', 'png', 'webp', 'gif',
+          'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt',
+        ],
+        withData: true,
+        allowMultiple: false,
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text('Could not open file picker: $e'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+    if (picked == null || picked.files.isEmpty) return;
+    final f = picked.files.single;
+    if (f.size > _maxAttachmentBytes) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Attachment is too large — 10 MB max.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+    if (!mounted) return;
+
+    setState(() => _uploading = true);
+    try {
+      final result = await context.read<ChatProvider>().sendMessage(
+            conversationId: widget.conversationId,
+            content: _input.text.trim(),
+            attachmentPath: f.path,
+            attachmentBytes: f.path == null ? f.bytes : null,
+            attachmentFilename: f.name,
+            attachmentContentType: _mimeForExtension(f.extension),
+          );
+      if (!mounted) return;
+      if (result == null) {
+        final err = context.read<ChatProvider>().error;
+        messenger.showSnackBar(SnackBar(
+          content: Text('Could not upload: ${err ?? 'unknown error'}'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+      _input.clear();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  String? _mimeForExtension(String? ext) {
+    switch ((ext ?? '').toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      case 'gif':
+        return 'image/gif';
+      case 'pdf':
+        return 'application/pdf';
+      case 'doc':
+        return 'application/msword';
+      case 'docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case 'xls':
+        return 'application/vnd.ms-excel';
+      case 'xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case 'txt':
+        return 'text/plain';
+      default:
+        return null;
+    }
   }
 
   void _onInputChanged(String _) {
@@ -130,6 +273,32 @@ class _ChatScreenState extends State<ChatScreen> {
     final isOtherTyping = !isSelf &&
         other != null &&
         context.watch<ChatProvider>().isPeerTyping(other.id);
+
+    // Auto-scroll on inbound message arrivals (socket fan-out). Only
+    // follow if the user is already near the bottom — otherwise we'd
+    // hijack the view while they're reading history. Sender-side scrolls
+    // are still forced by `_send()` after a successful POST.
+    //
+    // Gate on `!_loading`: while the spinner is up the ListView isn't
+    // mounted yet, so a transition from 0 → N during loading would
+    // bump _lastMsgCount without ever scrolling — leaving the user at
+    // the top once loading flips off. Waiting until !_loading means the
+    // first 0 → N delta runs *after* mount and the initial-load branch
+    // below jumps to bottom unconditionally.
+    if (!_loading && messages.length > _lastMsgCount) {
+      final isInitialLoad = _lastMsgCount == 0;
+      final wasNearBottom = _isNearBottom();
+      final lastIsMine = messages.isNotEmpty && messages.last.senderId == me;
+      _lastMsgCount = messages.length;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (isInitialLoad) {
+          _jumpToBottom();
+        } else if (lastIsMine || wasNearBottom) {
+          _animateToBottom();
+        }
+      });
+    }
 
     // Seeker-side conversations are tied to a job, and the backend
     // surfaces the linked company's branding alongside the participants.
@@ -271,7 +440,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   2;
                           return Column(
                             children: [
-                              if (showDate) _DateSeparator(date: m.sentAt),
+                              if (showDate)
+                                _DateSeparator(label: _formatDateHeading(m.sentAt)),
                               _Bubble(
                                 message: m,
                                 mine: mine,
@@ -301,6 +471,8 @@ class _ChatScreenState extends State<ChatScreen> {
             controller: _input,
             onChanged: _onInputChanged,
             onSend: _send,
+            onAttach: _pickAndSendAttachment,
+            uploading: _uploading,
           ),
         ],
       ),
@@ -410,13 +582,22 @@ class _Bubble extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    message.content,
-                    style: AppTextStyles.bodyMedium.copyWith(
-                      color: mine ? Colors.white : context.textPrimary,
-                      height: 1.35,
+                  if (message.file != null) ...[
+                    _AttachmentPreview(file: message.file!, mine: mine),
+                    if (message.content.isNotEmpty &&
+                        message.content != message.file!.filename)
+                      const SizedBox(height: 6),
+                  ],
+                  if (message.content.isNotEmpty &&
+                      (message.file == null ||
+                          message.content != message.file!.filename))
+                    Text(
+                      message.content,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: mine ? Colors.white : context.textPrimary,
+                        height: 1.35,
+                      ),
                     ),
-                  ),
                   // Timestamp + tick only on the last bubble in a run, so
                   // a 5-message burst doesn't repeat the same time five
                   // times — feels much closer to a real chat thread.
@@ -539,17 +720,139 @@ class _TypingBubbleState extends State<_TypingBubble>
   }
 }
 
+class _AttachmentPreview extends StatelessWidget {
+  final ChatFileAttachment file;
+  final bool mine;
+  const _AttachmentPreview({required this.file, required this.mine});
+
+  String _humanSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  IconData _iconForType(String type) {
+    if (type == 'application/pdf') return Icons.picture_as_pdf_rounded;
+    if (type.contains('word')) return Icons.description_rounded;
+    if (type.contains('sheet') || type.contains('excel')) {
+      return Icons.table_chart_rounded;
+    }
+    if (type == 'text/plain') return Icons.notes_rounded;
+    return Icons.insert_drive_file_rounded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (file.isImage) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: GestureDetector(
+          onTap: () => openChatAttachment(context, file),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 240,
+              maxHeight: 280,
+            ),
+            child: Hero(
+              tag: chatAttachmentHeroTag(file),
+              child: Image.network(
+                file.url,
+                fit: BoxFit.cover,
+                loadingBuilder: (_, child, progress) =>
+                    progress == null
+                        ? child
+                        : const SizedBox(
+                            width: 200,
+                            height: 200,
+                            child: Center(child: CircularProgressIndicator()),
+                          ),
+                errorBuilder: (_, __, ___) => Container(
+                  width: 200,
+                  height: 120,
+                  color: context.surfaceVariant,
+                  child: Icon(Icons.broken_image_rounded,
+                      color: context.textTertiary, size: 32),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    final fg = mine ? Colors.white : context.textPrimary;
+    final fgMuted =
+        mine ? Colors.white.withValues(alpha: 0.85) : context.textSecondary;
+    return InkWell(
+      onTap: () => openChatAttachment(context, file),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: mine
+              ? Colors.white.withValues(alpha: 0.16)
+              : context.surfaceVariant,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_iconForType(file.type), size: 28, color: fg),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    file.filename,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: fg,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _humanSize(file.sizeBytes),
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: fgMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _DateSeparator extends StatelessWidget {
-  final DateTime date;
-  const _DateSeparator({required this.date});
+  final String label;
+  const _DateSeparator({required this.label});
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Center(
-        child: Text(
-          DateFormat('EEE, d MMM').format(date.toLocal()),
-          style: AppTextStyles.bodySmall.copyWith(color: context.textTertiary),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: context.surfaceVariant,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: context.cardBorder),
+          ),
+          child: Text(
+            label,
+            style: AppTextStyles.bodySmall.copyWith(
+              color: context.textSecondary,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
       ),
     );
@@ -563,10 +866,14 @@ class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final ValueChanged<String> onChanged;
   final VoidCallback onSend;
+  final VoidCallback onAttach;
+  final bool uploading;
   const _Composer({
     required this.controller,
     required this.onChanged,
     required this.onSend,
+    required this.onAttach,
+    this.uploading = false,
   });
 
   @override
@@ -578,9 +885,31 @@ class _Composer extends StatelessWidget {
           color: context.surface,
           border: Border(top: BorderSide(color: context.cardBorder)),
         ),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
         child: Row(
           children: [
+            // Attach button — opens the system file picker. Sized to match
+            // the send button so the composer reads as a balanced row.
+            // Disabled while an upload is in flight to prevent picking a
+            // second file before the first finishes.
+            Material(
+              color: Colors.transparent,
+              shape: const CircleBorder(),
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: uploading ? null : onAttach,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.attach_file_rounded,
+                    color: uploading
+                        ? context.textTertiary
+                        : context.textSecondary,
+                    size: 22,
+                  ),
+                ),
+              ),
+            ),
             Expanded(
               child: TextField(
                 controller: controller,
@@ -621,20 +950,23 @@ class _Composer extends StatelessWidget {
             // Send button enabled-state mirrors the input — when there's
             // no text, the button dims and disables. Listening directly
             // to the controller avoids requiring the parent to rebuild
-            // on every keystroke.
+            // on every keystroke. While an attachment upload is in
+            // flight the icon is replaced with a spinner so the user
+            // sees the message is actively being sent.
             ValueListenableBuilder<TextEditingValue>(
               valueListenable: controller,
               builder: (_, value, __) {
                 final hasText = value.text.trim().isNotEmpty;
+                final active = uploading || hasText;
                 return AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOutCubic,
                   decoration: BoxDecoration(
-                    color: hasText
+                    color: active
                         ? AppColors.primary
                         : AppColors.primary.withValues(alpha: 0.35),
                     shape: BoxShape.circle,
-                    boxShadow: hasText
+                    boxShadow: active
                         ? [
                             BoxShadow(
                               color: AppColors.primary.withValues(alpha: 0.40),
@@ -649,11 +981,21 @@ class _Composer extends StatelessWidget {
                     shape: const CircleBorder(),
                     child: InkWell(
                       customBorder: const CircleBorder(),
-                      onTap: hasText ? onSend : null,
-                      child: const Padding(
-                        padding: EdgeInsets.all(10),
-                        child: Icon(Icons.send_rounded,
-                            color: Colors.white, size: 22),
+                      onTap: (uploading || !hasText) ? null : onSend,
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: uploading
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white),
+                                ),
+                              )
+                            : const Icon(Icons.send_rounded,
+                                color: Colors.white, size: 22),
                       ),
                     ),
                   ),

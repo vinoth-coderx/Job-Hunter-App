@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class AppConstants {
   AppConstants._();
 
@@ -20,14 +22,23 @@ class AppConstants {
   static const String keySavedSearches = 'saved_searches_v1';
   static const String keyThemeMode = 'theme_mode_v1';
   static const String keyAlertedHighMatchJobIds = 'alerted_high_match_jobs_v1';
+  // Marks whether the seeker has been shown the onboarding wizard at
+  // least once (finished OR skipped). Lets the role-switch flow stop
+  // re-prompting "Make it yours" every time the user toggles back to
+  // seeker after a stint in hirer mode.
+  static const String keySeekerOnboardingSeen = 'seeker_onboarding_seen_v1';
 
-  static const String apiBaseUrl = 'http://localhost:4000/api/v1';
-  // static const String apiBaseUrl =
-  //     'https://job-hunter-backend-mcc4.onrender.com/api/v1';
+  static const String _devApiBaseUrl = 'http://localhost:4000/api/v1';
+  static const String _prodApiBaseUrl =
+      'https://job-hunter-backend-mcc4.onrender.com/api/v1';
+  static String get apiBaseUrl =>
+      kReleaseMode ? _prodApiBaseUrl : _devApiBaseUrl;
 
-  // matches the backend's expectation.
+  // Web (type 3) client from android/app/google-services.json — must
+  // match Firebase project 'job-hunter-63fdc' so Google Sign-In on
+  // Android receives an ID token Firebase Auth will accept.
   static const String googleWebClientId =
-      '189382197401-ga6r49pivbrdsr1kgpjmq01nfq6bllb1.apps.googleusercontent.com';
+      '309121341037-jvjq5gdooel5ojc41vb8h8ineupe8olb.apps.googleusercontent.com';
   static bool get googleAuthConfigured => googleWebClientId.isNotEmpty;
 
   // Categories
