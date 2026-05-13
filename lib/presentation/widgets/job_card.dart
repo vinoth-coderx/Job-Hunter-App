@@ -123,7 +123,12 @@ class JobCard extends StatelessWidget {
   }
 
   Widget _cardBody(BuildContext context) {
-    final hasMatch = job.matchScore != null && job.matchScore! > 60;
+    // Pill is reserved for "best match" jobs only — anything 75% or
+    // higher gets the labelled %, anything below stays unbadged so
+    // the badge actually means something. The feed is still sorted
+    // desc by score, so the pills naturally cluster at the top of
+    // the list and fade out as the user scrolls.
+    final hasMatch = job.matchScore != null && job.matchScore! >= 75;
     final hasSalary = job.salary.isNotEmpty;
     final typeChips = _buildTypeChips();
     final perks = job.perks
@@ -458,14 +463,12 @@ class _MatchPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pct = score.round();
-    final Color color;
-    if (pct >= 90) {
-      color = AppColors.success;
-    } else if (pct >= 75) {
-      color = AppColors.primary;
-    } else {
-      color = AppColors.warning;
-    }
+    // Two-tier palette — the pill itself is gated to score >= 75, so
+    // only "strong" (75-84) and "excellent" (85+) jobs ever render
+    // one. Keeps the visual language honest: badge present = best
+    // match worth a look.
+    final Color color =
+        pct >= 85 ? AppColors.success : AppColors.primary;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(

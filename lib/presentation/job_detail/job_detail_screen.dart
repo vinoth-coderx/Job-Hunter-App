@@ -20,7 +20,6 @@ import '../widgets/compact_job_card.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/home_section.dart';
 import '../widgets/scroll_to_top_fab.dart';
-import 'apply_webview_screen.dart';
 import 'quick_apply_sheet.dart';
 import 'similar_jobs_screen.dart';
 
@@ -117,20 +116,39 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       return;
     }
 
-    // Open the official site inside our app and auto-mark applied on
-    // return. We treat the CTA tap itself as the intent-to-apply signal
-    // (same model as Indeed/LinkedIn click-tracking) and skip the
-    // post-webview "Did you apply?" sheet — it nags the user and most
-    // people answer it inconsistently anyway.
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => ApplyWebviewScreen(
-          url: url,
-          company: _job.company,
-        ),
-      ),
-    );
+    // Open the official site via the platform's in-app browser view —
+    // Chrome Custom Tabs on Android, SFSafariViewController on iOS. Both
+    // share the system browser's cookie jar, so Google / SSO logins work
+    // (an embedded WebView triggers Google's `disallowed_useragent` block
+    // and shows a blank page). If the OS doesn't support in-app browser
+    // view (older Android without Chrome, etc.), fall back to the
+    // external browser. Worst case both fail and we toast the user.
+    bool launched = false;
+    try {
+      launched = await launchUrl(
+        uri,
+        mode: LaunchMode.inAppBrowserView,
+        browserConfiguration:
+            const BrowserConfiguration(showTitle: true),
+      );
+    } catch (_) {/* swallow — try external next */}
+    if (!launched) {
+      try {
+        launched = await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication,
+        );
+      } catch (_) {/* fall through to error toast */}
+    }
     if (!mounted) return;
+    if (!launched) {
+      AppSnackbar.error(context, "Couldn't open the apply page");
+      return;
+    }
+    // We treat the CTA tap itself as the intent-to-apply signal (same
+    // model as Indeed / LinkedIn click-tracking) — mark applied as soon
+    // as the page is open. We can't observe the in-app browser closing
+    // anyway, so post-launch is the earliest reliable moment.
     await _markApplied(jobProvider);
   }
 

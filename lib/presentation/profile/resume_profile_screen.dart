@@ -175,16 +175,6 @@ class _AppBar extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: () {},
-                icon: Icon(Icons.search_rounded,
-                    color: context.textPrimary),
-              ),
-              IconButton(
-                onPressed: () {},
-                icon: Icon(Icons.more_vert_rounded,
-                    color: context.textPrimary),
-              ),
             ],
           ),
           const SizedBox(height: 4),

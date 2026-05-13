@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -98,7 +99,180 @@ class ResumeProfileProvider extends ChangeNotifier {
       changed = true;
     }
 
+    // Hydrate from server-side resumeProfile subdoc when local state has
+    // gaps — covers reinstall / device switch where local storage was
+    // wiped but the backend still holds the rich profile data.
+    final remote = user.resumeProfile;
+    if (remote != null) {
+      final hydrated = _hydrateFromRemote(next, remote);
+      if (!identical(hydrated, next)) {
+        next = hydrated;
+        changed = true;
+      }
+    }
+
     if (changed) _persist(next);
+  }
+
+  ResumeProfile _hydrateFromRemote(
+    ResumeProfile current,
+    Map<String, dynamic> remote,
+  ) {
+    var next = current;
+    String s(String key) {
+      final v = remote[key];
+      return v is String ? v.trim() : '';
+    }
+
+    List<Map<String, dynamic>> mList(String key) {
+      final v = remote[key];
+      if (v is! List) return const [];
+      return v
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList(growable: false);
+    }
+
+    if (next.profileSummary.isEmpty) {
+      final v = s('profileSummary');
+      if (v.isNotEmpty) next = next.copyWith(profileSummary: v);
+    }
+    if (next.employments.isEmpty) {
+      final list = mList('employments');
+      if (list.isNotEmpty) {
+        next = next.copyWith(
+          employments:
+              list.map((e) => EmploymentEntry.fromJson(e)).toList(),
+        );
+      }
+    }
+    if (next.educations.isEmpty) {
+      final list = mList('educations');
+      if (list.isNotEmpty) {
+        next = next.copyWith(
+          educations:
+              list.map((e) => EducationEntry.fromJson(e)).toList(),
+        );
+      }
+    }
+    if (next.itSkills.isEmpty) {
+      final list = mList('itSkills');
+      if (list.isNotEmpty) {
+        next = next.copyWith(
+          itSkills: list.map((e) => ITSkill.fromJson(e)).toList(),
+        );
+      }
+    }
+    if (next.projects.isEmpty) {
+      final list = mList('projects');
+      if (list.isNotEmpty) {
+        next = next.copyWith(
+          projects:
+              list.map((e) => ProjectEntry.fromJson(e)).toList(),
+        );
+      }
+    }
+    if (next.languages.isEmpty) {
+      final list = mList('languages');
+      if (list.isNotEmpty) {
+        next = next.copyWith(
+          languages: list
+              .map((e) => LanguageProficiency.fromJson(e))
+              .toList(),
+        );
+      }
+    }
+    if (next.accomplishments.isEmpty) {
+      final list = mList('accomplishments');
+      if (list.isNotEmpty) {
+        next = next.copyWith(
+          accomplishments:
+              list.map((e) => Accomplishment.fromJson(e)).toList(),
+        );
+      }
+    }
+    final career = remote['careerProfile'];
+    if (career is Map<String, dynamic>) {
+      final cur = next.careerProfile;
+      final hydratedCareer = CareerProfile.fromJson(career);
+      var updated = cur;
+      if (cur.currentIndustry.isEmpty &&
+          hydratedCareer.currentIndustry.isNotEmpty) {
+        updated = updated.copyWith(
+            currentIndustry: hydratedCareer.currentIndustry);
+      }
+      if (updated.department.isEmpty &&
+          hydratedCareer.department.isNotEmpty) {
+        updated = updated.copyWith(department: hydratedCareer.department);
+      }
+      if (updated.roleCategory.isEmpty &&
+          hydratedCareer.roleCategory.isNotEmpty) {
+        updated =
+            updated.copyWith(roleCategory: hydratedCareer.roleCategory);
+      }
+      if (updated.jobRole.isEmpty && hydratedCareer.jobRole.isNotEmpty) {
+        updated = updated.copyWith(jobRole: hydratedCareer.jobRole);
+      }
+      if (updated.desiredJobType.isEmpty &&
+          hydratedCareer.desiredJobType.isNotEmpty) {
+        updated = updated.copyWith(
+            desiredJobType: hydratedCareer.desiredJobType);
+      }
+      if (updated.desiredEmploymentType.isEmpty &&
+          hydratedCareer.desiredEmploymentType.isNotEmpty) {
+        updated = updated.copyWith(
+            desiredEmploymentType: hydratedCareer.desiredEmploymentType);
+      }
+      if (updated.preferredShift.isEmpty &&
+          hydratedCareer.preferredShift.isNotEmpty) {
+        updated = updated.copyWith(
+            preferredShift: hydratedCareer.preferredShift);
+      }
+      if (updated.preferredLocation.isEmpty &&
+          hydratedCareer.preferredLocation.isNotEmpty) {
+        updated = updated.copyWith(
+            preferredLocation: hydratedCareer.preferredLocation);
+      }
+      if (updated.expectedSalary.isEmpty &&
+          hydratedCareer.expectedSalary.isNotEmpty) {
+        updated = updated.copyWith(
+            expectedSalary: hydratedCareer.expectedSalary);
+      }
+      if (updated != cur) next = next.copyWith(careerProfile: updated);
+    }
+    final personal = remote['personalDetails'];
+    if (personal is Map<String, dynamic>) {
+      final cur = next.personalDetails;
+      final hydratedPersonal = PersonalDetails.fromJson(personal);
+      var updated = cur;
+      if (cur.gender.isEmpty && hydratedPersonal.gender.isNotEmpty) {
+        updated = updated.copyWith(gender: hydratedPersonal.gender);
+      }
+      if (updated.maritalStatus.isEmpty &&
+          hydratedPersonal.maritalStatus.isNotEmpty) {
+        updated = updated.copyWith(
+            maritalStatus: hydratedPersonal.maritalStatus);
+      }
+      if (updated.dob.isEmpty && hydratedPersonal.dob.isNotEmpty) {
+        updated = updated.copyWith(dob: hydratedPersonal.dob);
+      }
+      if (updated.category.isEmpty && hydratedPersonal.category.isNotEmpty) {
+        updated = updated.copyWith(category: hydratedPersonal.category);
+      }
+      if (updated.workPermit.isEmpty &&
+          hydratedPersonal.workPermit.isNotEmpty) {
+        updated = updated.copyWith(workPermit: hydratedPersonal.workPermit);
+      }
+      if (updated.address.isEmpty && hydratedPersonal.address.isNotEmpty) {
+        updated = updated.copyWith(address: hydratedPersonal.address);
+      }
+      if (updated != cur) next = next.copyWith(personalDetails: updated);
+    }
+    final diversity = s('diversityNote');
+    if (next.diversityNote.isEmpty && diversity.isNotEmpty) {
+      next = next.copyWith(diversityNote: diversity);
+    }
+    return next;
   }
 
   /// Pull resume metadata + parsed fields from the backend on screen open.
@@ -186,7 +360,12 @@ class ResumeProfileProvider extends ChangeNotifier {
           _profile.employments.isEmpty ||
           _profile.educations.isEmpty ||
           _profile.itSkills.isEmpty ||
-          _profile.projects.isEmpty;
+          _profile.projects.isEmpty ||
+          _profile.accomplishments.isEmpty ||
+          _profile.careerProfile.currentIndustry.isEmpty ||
+          _profile.careerProfile.jobRole.isEmpty ||
+          _profile.personalDetails.dob.isEmpty ||
+          _profile.personalDetails.address.isEmpty;
       if (!needsAutoFill) return;
 
       Map<String, dynamic>? parsed;
@@ -367,6 +546,8 @@ class ResumeProfileProvider extends ChangeNotifier {
       final address = (personal['address'] as String? ?? '').trim();
       final gender = (personal['gender'] as String? ?? '').trim();
       final marital = (personal['maritalStatus'] as String? ?? '').trim();
+      final category = (personal['category'] as String? ?? '').trim();
+      final workPermit = (personal['workPermit'] as String? ?? '').trim();
       var personalChanged = false;
       var updated = cur;
       if (cur.dob.isEmpty && dob.isNotEmpty) {
@@ -385,8 +566,77 @@ class ResumeProfileProvider extends ChangeNotifier {
         updated = updated.copyWith(maritalStatus: marital);
         personalChanged = true;
       }
+      if (cur.category.isEmpty && category.isNotEmpty) {
+        updated = updated.copyWith(category: category);
+        personalChanged = true;
+      }
+      if (cur.workPermit.isEmpty && workPermit.isNotEmpty) {
+        updated = updated.copyWith(workPermit: workPermit);
+        personalChanged = true;
+      }
       if (personalChanged) {
         next = next.copyWith(personalDetails: updated);
+        filled++;
+      }
+    }
+
+    final career = parsed['careerProfile'];
+    if (career is Map<String, dynamic>) {
+      final cur = next.careerProfile;
+      String pick(String key) => (career[key] as String? ?? '').trim();
+      var careerChanged = false;
+      var updatedCareer = cur;
+      void apply(String currentValue, String newValue,
+          CareerProfile Function(String) setter) {
+        if (currentValue.isEmpty && newValue.isNotEmpty) {
+          updatedCareer = setter(newValue);
+          careerChanged = true;
+        }
+      }
+
+      apply(cur.currentIndustry, pick('currentIndustry'),
+          (v) => updatedCareer.copyWith(currentIndustry: v));
+      apply(updatedCareer.department, pick('department'),
+          (v) => updatedCareer.copyWith(department: v));
+      apply(updatedCareer.roleCategory, pick('roleCategory'),
+          (v) => updatedCareer.copyWith(roleCategory: v));
+      apply(updatedCareer.jobRole, pick('jobRole'),
+          (v) => updatedCareer.copyWith(jobRole: v));
+      apply(updatedCareer.desiredJobType, pick('desiredJobType'),
+          (v) => updatedCareer.copyWith(desiredJobType: v));
+      apply(updatedCareer.desiredEmploymentType, pick('desiredEmploymentType'),
+          (v) => updatedCareer.copyWith(desiredEmploymentType: v));
+      apply(updatedCareer.preferredShift, pick('preferredShift'),
+          (v) => updatedCareer.copyWith(preferredShift: v));
+      apply(updatedCareer.preferredLocation, pick('preferredLocation'),
+          (v) => updatedCareer.copyWith(preferredLocation: v));
+      apply(updatedCareer.expectedSalary, pick('expectedSalary'),
+          (v) => updatedCareer.copyWith(expectedSalary: v));
+
+      if (careerChanged) {
+        next = next.copyWith(careerProfile: updatedCareer);
+        filled++;
+      }
+    }
+
+    final accomplishments = mList('accomplishments');
+    if (next.accomplishments.isEmpty && accomplishments.isNotEmpty) {
+      final mapped = accomplishments
+          .map((e) {
+            final type = (e['type'] as String? ?? '').trim();
+            final value = (e['value'] as String? ?? '').trim();
+            final label = (e['label'] as String? ?? '').trim();
+            if (type.isEmpty || value.isEmpty) return null;
+            return Accomplishment(
+              type: type,
+              label: label.isEmpty ? type : label,
+              value: value,
+            );
+          })
+          .whereType<Accomplishment>()
+          .toList();
+      if (mapped.isNotEmpty) {
+        next = next.copyWith(accomplishments: mapped);
         filled++;
       }
     }
@@ -474,6 +724,40 @@ class ResumeProfileProvider extends ChangeNotifier {
     _profile = next;
     notifyListeners();
     await StorageService.saveResumeProfile(next);
+    unawaited(_pushToBackend(next));
+  }
+
+  /// Fire-and-forget sync of the resume profile to the backend. Failures
+  /// are intentionally swallowed — the local state is still saved, and
+  /// the next successful sync will reconcile. Without this the AI-filled
+  /// + manually-edited fields would not survive a reinstall.
+  Future<void> _pushToBackend(ResumeProfile p) async {
+    try {
+      final body = <String, dynamic>{
+        if (p.resumeHeadline.isNotEmpty) 'headline': p.resumeHeadline,
+        if (p.keySkills.isNotEmpty) 'skills': p.keySkills,
+        if (p.expYears > 0) 'experienceYears': p.expYears,
+        if (p.profileSummary.isNotEmpty) 'profileSummary': p.profileSummary,
+        'employments':
+            p.employments.map((e) => e.toJson()).toList(growable: false),
+        'educations':
+            p.educations.map((e) => e.toJson()).toList(growable: false),
+        'itSkills':
+            p.itSkills.map((e) => e.toJson()).toList(growable: false),
+        'projects':
+            p.projects.map((e) => e.toJson()).toList(growable: false),
+        'languages':
+            p.languages.map((e) => e.toJson()).toList(growable: false),
+        'accomplishments':
+            p.accomplishments.map((e) => e.toJson()).toList(growable: false),
+        'careerProfile': p.careerProfile.toJson(),
+        'personalDetails': p.personalDetails.toJson(),
+        if (p.diversityNote.isNotEmpty) 'diversityNote': p.diversityNote,
+      };
+      await UserService().pushResumeProfile(body);
+    } catch (_) {
+      // Local state already saved; next push will reconcile.
+    }
   }
 
   Future<void> updateHeader({

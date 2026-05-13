@@ -71,9 +71,8 @@ class _EmailAuthScreenState extends State<EmailAuthScreen>
 
         if (ok) {
           // Fresh sign-up → role picker (seeker/hirer choice gates the
-          // role-specific setup that follows). Returning sign-in always
-          // goes straight to /main — legacy accounts with empty profiles
-          // can fill the gaps later from the profile screen.
+          // role-specific setup that follows). Returning sign-in lands
+          // straight on /main.
           final dest = _isSignUp ? AppRoutes.rolePicker : AppRoutes.main;
           Navigator.pushNamedAndRemoveUntil(context, dest, (_) => false);
         } else {

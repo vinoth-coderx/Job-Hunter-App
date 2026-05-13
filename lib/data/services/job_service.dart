@@ -50,12 +50,11 @@ class JobPage {
 class JobService {
   final ApiClient _api = ApiClient.instance;
 
-  /// First page of the authenticated home feed: all ranked jobs sorted by
-  /// match score desc. Threshold is 0 so a weakly-overlapping profile still
-  /// sees jobs (the matcher already ranks best-first); the backend further
-  /// falls back to recency when the candidate pool is empty.
+  /// First page of the authenticated home feed. We let the server enforce
+  /// its default match floor (70%) — the home feed must only show jobs
+  /// that overlap the user's profile, never random recency-sorted slop.
   Future<JobPage> homeFeedPage({int page = 1, int limit = 20}) =>
-      matchedFeedPage(page: page, limit: limit, threshold: 0);
+      matchedFeedPage(page: page, limit: limit);
 
   /// First page of the guest feed — same endpoint, backend recognises the
   /// guest JWT and returns recency-sorted public jobs across all domains.
@@ -64,8 +63,8 @@ class JobService {
 
   /// Backwards-compatible single-shot fetch. Kept for callers that don't
   /// paginate (refresh, applications screen). Returns just the jobs list.
-  Future<List<Job>> homeFeed({int threshold = 0, int limit = 50}) async =>
-      (await matchedFeedPage(limit: limit, threshold: threshold)).jobs;
+  Future<List<Job>> homeFeed({int limit = 50}) async =>
+      (await matchedFeedPage(limit: limit)).jobs;
 
   Future<List<Job>> guestFeed({int limit = 50}) async =>
       (await matchedFeedPage(limit: limit)).jobs;
@@ -84,13 +83,13 @@ class JobService {
   Future<JobPage> matchedFeedPage({
     int page = 1,
     int limit = 20,
-    int threshold = 50,
+    int? threshold,
     bool ai = false,
   }) async {
     final raw = await _api.get('jobs/matched', query: {
       'page': page,
       'limit': limit,
-      'threshold': threshold,
+      if (threshold != null) 'threshold': threshold,
       if (ai) 'ai': 'true',
     });
     final jobs = ApiClient.unwrapList(raw)

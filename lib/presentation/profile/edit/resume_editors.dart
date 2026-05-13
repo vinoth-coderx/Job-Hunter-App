@@ -1382,7 +1382,7 @@ Future<void> _runResumeAutoPopulate(
     // refresh the wallet so the home pill reflects the +50 bonus.
     coinsProvider.refresh();
 
-    overlayState.update('Reading your resume…');
+    overlayState.update('AI is reading your resume…');
     final parsed = await userService.parseResume();
 
     if (parsed == null) {
@@ -1393,7 +1393,7 @@ Future<void> _runResumeAutoPopulate(
       return;
     }
 
-    overlayState.update('Filling your profile…');
+    overlayState.update('Auto-filling your profile…');
     final filledCount = await provider.applyParsedResume(parsed);
 
     dismiss();
@@ -1419,7 +1419,7 @@ Future<void> _runResumeAutoPopulate(
 }
 
 class _ResumeAutoFillOverlayController extends ChangeNotifier {
-  String _label = 'Reading your resume…';
+  String _label = 'AI is reading your resume…';
   String get label => _label;
   void update(String next) {
     _label = next;

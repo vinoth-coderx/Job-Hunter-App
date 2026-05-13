@@ -166,8 +166,7 @@ class _CheckoutHeader extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(6),
@@ -250,8 +249,8 @@ class _CheckoutHeader extends StatelessWidget {
                 children: [
                   Text(
                     'Amount',
-                    style: AppTextStyles.bodySmall
-                        .copyWith(color: Colors.white70),
+                    style:
+                        AppTextStyles.bodySmall.copyWith(color: Colors.white70),
                   ),
                   Text(
                     amount,
@@ -313,8 +312,7 @@ class _PlanHero extends StatelessWidget {
               children: [
                 Text(
                   'Job Hunter ${plan.name}',
-                  style: AppTextStyles.h4
-                      .copyWith(fontWeight: FontWeight.w800),
+                  style: AppTextStyles.h4.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -409,12 +407,21 @@ class _HowItWorks extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final steps = [
-      (Icons.payment_rounded, 'Pick a method',
-          'UPI, Card, Net Banking, or Wallet — all in Razorpay.'),
-      (Icons.lock_rounded, 'Pay securely',
-          '256-bit encrypted. Your card details never touch our servers.'),
-      (Icons.bolt_rounded, 'Instant activation',
-          'Pro features unlock the moment your payment is confirmed.'),
+      (
+        Icons.payment_rounded,
+        'Pick a method',
+        'UPI, Card, Net Banking, or Wallet — all in Razorpay.'
+      ),
+      (
+        Icons.lock_rounded,
+        'Pay securely',
+        '256-bit encrypted. Your card details never touch our servers.'
+      ),
+      (
+        Icons.bolt_rounded,
+        'Instant activation',
+        'Pro features unlock the moment your payment is confirmed.'
+      ),
     ];
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
@@ -427,8 +434,7 @@ class _HowItWorks extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('How it works',
-              style: AppTextStyles.label
-                  .copyWith(fontWeight: FontWeight.w800)),
+              style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w800)),
           const SizedBox(height: 12),
           for (var i = 0; i < steps.length; i++) ...[
             Row(
@@ -441,8 +447,7 @@ class _HowItWorks extends StatelessWidget {
                     color: AppColors.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(steps[i].$1,
-                      size: 18, color: AppColors.primary),
+                  child: Icon(steps[i].$1, size: 18, color: AppColors.primary),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -450,11 +455,10 @@ class _HowItWorks extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(steps[i].$2,
-                          style: AppTextStyles.bodyMedium.copyWith(
-                              fontWeight: FontWeight.w700)),
+                          style: AppTextStyles.bodyMedium
+                              .copyWith(fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
-                      Text(steps[i].$3,
-                          style: AppTextStyles.bodySmall),
+                      Text(steps[i].$3, style: AppTextStyles.bodySmall),
                     ],
                   ),
                 ),
@@ -490,8 +494,7 @@ class _TrustStrip extends StatelessWidget {
           for (final item in items)
             Column(
               children: [
-                Icon(item.$1,
-                    size: 22, color: context.textSecondary),
+                Icon(item.$1, size: 22, color: context.textSecondary),
                 const SizedBox(height: 6),
                 Text(
                   item.$2,

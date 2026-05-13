@@ -75,23 +75,22 @@ class AppColors {
 extension AppPalette on BuildContext {
   bool get isDark => Theme.of(this).brightness == Brightness.dark;
 
-  Color get surface =>
-      isDark ? AppColors.darkSurface : AppColors.surface;
+  Color get surface => isDark ? AppColors.darkSurface : AppColors.surface;
   Color get surfaceVariant =>
       isDark ? AppColors.darkSurfaceVariant : AppColors.surfaceVariant;
-  Color get scaffoldBg => isDark
-      ? AppColors.darkScaffoldBackground
-      : AppColors.scaffoldBackground;
+  Color get scaffoldBg =>
+      isDark ? AppColors.darkScaffoldBackground : AppColors.scaffoldBackground;
   Color get gradientTop =>
       isDark ? AppColors.darkGradientTop : AppColors.gradientTop;
   Color get gradientBottom =>
       isDark ? AppColors.darkGradientBottom : AppColors.gradientBottom;
   Color get cardBorder =>
       isDark ? AppColors.darkCardBorder : AppColors.cardBorder;
-  Color get divider =>
-      isDark ? AppColors.darkCardBorder : AppColors.divider;
+  Color get divider => isDark ? AppColors.darkCardBorder : AppColors.divider;
   Color get textPrimary =>
       isDark ? AppColors.darkTextPrimary : AppColors.textPrimary;
+  Color get textPrimaryReverse =>
+      isDark ? AppColors.textPrimary : AppColors.darkTextPrimary;
   Color get textSecondary =>
       isDark ? AppColors.darkTextSecondary : AppColors.textSecondary;
   Color get textTertiary =>
@@ -107,9 +106,8 @@ extension AppPalette on BuildContext {
 
   /// Foreground (text) color for soft tag chips. Slightly brighter in
   /// dark mode to maintain readable contrast against `primaryTintBg`.
-  Color get primaryTintFg => isDark
-      ? const Color(0xFF93B7FF)
-      : AppColors.primary;
+  Color get primaryTintFg =>
+      isDark ? const Color(0xFF93B7FF) : AppColors.primary;
 
   /// Neutral chip background used for category & filter chips.
   Color get chipBg =>
@@ -125,16 +123,12 @@ extension AppPalette on BuildContext {
   /// (designed against white cards). On dark surfaces those wash-outs
   /// glow uncomfortably, so dark mode swaps to translucent tints of
   /// the same hue that sit naturally on `context.surface`.
-  Color get successBg => isDark
-      ? AppColors.success.withValues(alpha: 0.18)
-      : AppColors.successBg;
-  Color get warningBg => isDark
-      ? AppColors.warning.withValues(alpha: 0.18)
-      : AppColors.warningBg;
-  Color get urgentBg => isDark
-      ? AppColors.urgent.withValues(alpha: 0.18)
-      : AppColors.urgentBg;
-  Color get infoBg => isDark
-      ? AppColors.info.withValues(alpha: 0.18)
-      : AppColors.infoBg;
+  Color get successBg =>
+      isDark ? AppColors.success.withValues(alpha: 0.18) : AppColors.successBg;
+  Color get warningBg =>
+      isDark ? AppColors.warning.withValues(alpha: 0.18) : AppColors.warningBg;
+  Color get urgentBg =>
+      isDark ? AppColors.urgent.withValues(alpha: 0.18) : AppColors.urgentBg;
+  Color get infoBg =>
+      isDark ? AppColors.info.withValues(alpha: 0.18) : AppColors.infoBg;
 }

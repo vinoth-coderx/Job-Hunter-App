@@ -36,8 +36,11 @@ class _CoinsScreenState extends State<CoinsScreen> {
     _load();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  Future<void> _load({bool silent = false}) async {
+    // `silent` skips the full-page spinner — used for pull-to-refresh
+    // (RefreshIndicator gives its own affordance) and post-action
+    // resyncs so the screen doesn't visibly "restart" mid-interaction.
+    if (!silent) setState(() => _loading = true);
     try {
       // Three independent reads — fan out so the hero renders fast.
       final results = await Future.wait([
@@ -66,6 +69,18 @@ class _CoinsScreenState extends State<CoinsScreen> {
       final result = await _service.checkIn();
       if (!mounted) return;
       context.read<CoinsProvider>().setBalance(result.coinsBalance);
+      // The check-in response already carries the post-action streak
+      // numbers — synthesize a fresh StreakInfo locally instead of
+      // re-fetching, which would otherwise blank the whole screen with
+      // the load spinner and feel like a screen restart.
+      setState(() {
+        _streak = StreakInfo(
+          streakCount: result.streakCount,
+          longestStreak: result.longestStreak,
+          lastCheckinDate: DateTime.now(),
+          checkedInToday: true,
+        );
+      });
       AppSnackbar.success(
         context,
         result.streakChanged
@@ -74,7 +89,6 @@ class _CoinsScreenState extends State<CoinsScreen> {
                 : 'Day ${result.streakCount} 🔥 — keep going!')
             : 'Already checked in today.',
       );
-      await _load();
     } catch (e) {
       if (!mounted) return;
       AppSnackbar.error(context, 'Check-in failed: $e');
@@ -110,7 +124,7 @@ class _CoinsScreenState extends State<CoinsScreen> {
         elevation: 0,
       ),
       body: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () => _load(silent: true),
         color: AppColors.primary,
         child: _loading
             ? const Center(child: CircularProgressIndicator())

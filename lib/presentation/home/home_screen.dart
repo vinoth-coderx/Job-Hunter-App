@@ -196,6 +196,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       color: AppColors.primary,
       child: CustomScrollView(
         controller: _scrollCtrl,
+        // Pull-to-refresh needs an overscrollable list; without this,
+        // the empty state has no scrollable extent and the user can't
+        // pull at all.
+        physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           SliverAppBar(
             pinned: true,

@@ -135,6 +135,17 @@ class UserService {
     return null;
   }
 
+  /// Pushes the long-form resume profile (employments, educations, career
+  /// profile, accomplishments, personal details, etc.) to the backend so
+  /// it survives reinstalls and follows the user across devices.
+  ///
+  /// Fire-and-forget at most call sites — failure shouldn't block local
+  /// edits. The provider keeps the canonical local state regardless.
+  Future<void> pushResumeProfile(Map<String, dynamic> body) async {
+    if (body.isEmpty) return;
+    await _api.patch('users/resume-profile', body: body);
+  }
+
   Future<Map<String, dynamic>?> getResumeMeta() async {
     try {
       final raw = await _api.get('users/resume/meta');

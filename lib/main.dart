@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import 'core/routes/app_routes.dart';
 import 'core/theme/app_theme.dart';
+import 'firebase_options.dart';
 import 'data/models/job_model.dart';
 import 'data/services/api_client.dart';
 import 'data/services/push_service.dart';
@@ -95,12 +98,15 @@ Future<void> main() async {
   // Initialize local storage
   await StorageService.init();
 
-  // Firebase — picks up google-services.json (Android) and
-  // GoogleService-Info.plist (iOS) from the platform folders. If those
-  // files aren't present yet, we swallow the error so dev builds still
-  // launch; PushService.init() will become a no-op until they're added.
+  // Firebase — uses DefaultFirebaseOptions.currentPlatform so web,
+  // Android, and iOS all initialize from the FlutterFire-generated
+  // firebase_options.dart. Wrapped in try/catch so dev builds still
+  // launch if config is missing on a platform; PushService.init() will
+  // then become a no-op.
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
   } catch (e, st) {
     debugPrint('Firebase.initializeApp failed (push disabled): $e\n$st');
   }
@@ -108,8 +114,10 @@ Future<void> main() async {
   // Wire FCM + local notifications. Idempotent — also re-called after
   // sign-in so the device token can be registered against the new user.
   // Safe to call before the user is authenticated; it'll silently skip
-  // the backend register and retry on the next init().
-  await PushService.init();
+  // the backend register and retry on the next init(). Fire-and-forget
+  // so a slow FCM token round-trip doesn't delay the first splash frame
+  // on cold start — push permission prompts can wait one extra tick.
+  unawaited(PushService.init());
 
   runApp(const JobHunterApp());
 }
@@ -405,3 +413,4 @@ class _AppRoot extends StatelessWidget {
     );
   }
 }
+

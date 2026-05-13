@@ -67,6 +67,10 @@ class UserModel {
   final int? expectedSalaryMin;
   final String? resumeText;
   final bool isEmailVerified;
+  /// Raw `profile.resumeProfile` subdoc from /auth/me, kept as a map so
+  /// the resume profile provider can hydrate its rich Naukri-style
+  /// sections without UserModel needing to know the full shape.
+  final Map<String, dynamic>? resumeProfile;
 
   const UserModel({
     required this.id,
@@ -92,6 +96,7 @@ class UserModel {
     this.expectedSalaryMin,
     this.resumeText,
     this.isEmailVerified = false,
+    this.resumeProfile,
   });
 
   UserModel copyWith({
@@ -117,6 +122,7 @@ class UserModel {
     int? expectedSalaryMin,
     String? resumeText,
     bool? isEmailVerified,
+    Map<String, dynamic>? resumeProfile,
   }) {
     return UserModel(
       id: id,
@@ -142,6 +148,7 @@ class UserModel {
       expectedSalaryMin: expectedSalaryMin ?? this.expectedSalaryMin,
       resumeText: resumeText ?? this.resumeText,
       isEmailVerified: isEmailVerified ?? this.isEmailVerified,
+      resumeProfile: resumeProfile ?? this.resumeProfile,
     );
   }
 
@@ -169,6 +176,7 @@ class UserModel {
         'expectedSalaryMin': expectedSalaryMin,
         'resumeText': resumeText,
         'isEmailVerified': isEmailVerified,
+        'resumeProfile': resumeProfile,
       };
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
@@ -198,6 +206,9 @@ class UserModel {
         expectedSalaryMin: json['expectedSalaryMin'] as int?,
         resumeText: json['resumeText'] as String?,
         isEmailVerified: (json['isEmailVerified'] as bool?) ?? false,
+        resumeProfile: json['resumeProfile'] is Map<String, dynamic>
+            ? Map<String, dynamic>.from(json['resumeProfile'] as Map)
+            : null,
       );
 
   /// Parses the API response shape from the Job Hunter backend, which uses
@@ -255,6 +266,9 @@ class UserModel {
       resumeText: profile['resumeText'] as String? ??
           json['resumeText'] as String?,
       isEmailVerified: (json['isEmailVerified'] as bool?) ?? false,
+      resumeProfile: profile['resumeProfile'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(profile['resumeProfile'] as Map)
+          : null,
     );
   }
 

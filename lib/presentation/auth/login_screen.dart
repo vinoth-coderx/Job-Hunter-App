@@ -28,9 +28,8 @@ class _LoginScreenState extends State<LoginScreen> {
       // Firebase reports `additionalUserInfo.isNewUser` only on the
       // sign-in that actually created the account, so this is the
       // single moment we route a Google user to the role picker.
-      final dest = auth.lastSignInIsNewUser
-          ? AppRoutes.rolePicker
-          : AppRoutes.main;
+      final dest =
+          auth.lastSignInIsNewUser ? AppRoutes.rolePicker : AppRoutes.main;
       Navigator.pushReplacementNamed(context, dest);
     } else {
       setState(() => _errorMsg = auth.error ?? 'Google sign-in failed');
@@ -93,14 +92,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 28),
                 Text(
                   'Welcome to Job Hunter',
-                  style: AppTextStyles.h1
-                      .copyWith(fontWeight: FontWeight.w800),
+                  style: AppTextStyles.h1.copyWith(fontWeight: FontWeight.w800),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(50),
@@ -221,8 +219,8 @@ class _ErrorBanner extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
             child: const Padding(
               padding: EdgeInsets.all(4),
-              child: Icon(Icons.close_rounded,
-                  color: AppColors.urgent, size: 18),
+              child:
+                  Icon(Icons.close_rounded, color: AppColors.urgent, size: 18),
             ),
           ),
         ],
