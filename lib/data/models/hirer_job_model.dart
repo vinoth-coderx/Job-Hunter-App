@@ -31,6 +31,10 @@ class HirerJob {
   final DateTime? publishedAt;
   final DateTime? closedAt;
   final DateTime createdAt;
+  /// Mirror of `Job.moderation.status` — 'pending' | 'approved' |
+  /// 'rejected' | 'queued'. Lets the manage-jobs row surface an
+  /// "Appeal" affordance when the AI moderation rejected the post.
+  final String? moderationStatus;
 
   const HirerJob({
     required this.id,
@@ -63,6 +67,7 @@ class HirerJob {
     this.publishedAt,
     this.closedAt,
     required this.createdAt,
+    this.moderationStatus,
   });
 
   factory HirerJob.fromJson(Map<String, dynamic> j) {
@@ -112,6 +117,9 @@ class HirerJob {
       publishedAt: d(j['publishedAt']),
       closedAt: d(j['closedAt']),
       createdAt: d(j['createdAt']) ?? DateTime.now(),
+      moderationStatus: j['moderation'] is Map<String, dynamic>
+          ? (j['moderation'] as Map<String, dynamic>)['status'] as String?
+          : null,
     );
   }
 }

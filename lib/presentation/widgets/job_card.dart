@@ -137,6 +137,14 @@ class JobCard extends StatelessWidget {
         .toList();
     final hasActions = onDismiss != null;
     final hasOneTap = job.isNative;
+    // Trust warning surfaces ONLY when the recruiter is flagged: either
+    // unapproved, or trust-scored below the warning band. High-trust
+    // jobs stay unmarked so the warning pill keeps signal value (a pill
+    // means "be careful" — its absence is the safe default).
+    final ts = job.recruiterTrustScore;
+    final hasTrustWarning =
+        !job.recruiterApproved || (ts != null && ts < 40);
+    final isHighRisk = ts != null && ts < 25;
     // Corner ribbons cover ~90px in the top-left and top-right; the
     // floating save icon takes ~36px on the top-right when no ribbon
     // is present. Inset the title/meta so they don't slide under either.
@@ -167,7 +175,7 @@ class JobCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (hasOneTap || hasMatch || hasActions) ...[
+              if (hasOneTap || hasMatch || hasActions || hasTrustWarning) ...[
                 Padding(
                   padding: EdgeInsets.only(
                     left: leftRibbonInset,
@@ -179,6 +187,10 @@ class JobCard extends StatelessWidget {
                       if (hasOneTap && hasMatch) const SizedBox(width: 6),
                       if (hasMatch)
                         _MatchPill(score: job.matchScore!),
+                      if ((hasOneTap || hasMatch) && hasTrustWarning)
+                        const SizedBox(width: 6),
+                      if (hasTrustWarning)
+                        _TrustWarningPill(highRisk: isHighRisk),
                       const Spacer(),
                       if (onDismiss != null)
                         _ActionIconButton(
@@ -210,16 +222,30 @@ class JobCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Padding(
                   padding: EdgeInsets.only(right: rightRibbonInset),
-                  child: Text(
-                    job.company,
-                    style: AppTextStyles.bodySmall.copyWith(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: context.textSecondary,
-                      height: 1.35,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          job.company,
+                          style: AppTextStyles.bodySmall.copyWith(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: context.textSecondary,
+                            height: 1.35,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (job.companyVerified) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.verified,
+                          size: 14,
+                          color: AppColors.primary,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
@@ -483,6 +509,53 @@ class _MatchPill extends StatelessWidget {
           const SizedBox(width: 4),
           Text(
             '$pct% match',
+            style: AppTextStyles.labelSmall.copyWith(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 11,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact trust-warning pill rendered next to the One-Tap / match pills
+/// when the recruiter is unapproved or low-trust. Two intensity levels:
+///   - default      : amber "Unverified recruiter" — caution, not panic
+///   - highRisk:true : red    "High risk" — strong scam signal
+/// We deliberately don't show a "trusted" pill on healthy jobs so the
+/// presence of this badge always means "be careful".
+class _TrustWarningPill extends StatelessWidget {
+  final bool highRisk;
+  const _TrustWarningPill({required this.highRisk});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = highRisk ? AppColors.urgent : AppColors.warning;
+    final label = highRisk ? 'High risk' : 'Unverified';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: AppRadius.smRadius,
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            highRisk
+                ? Icons.gpp_bad_rounded
+                : Icons.shield_outlined,
+            size: 11,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            label,
             style: AppTextStyles.labelSmall.copyWith(
               color: color,
               fontWeight: FontWeight.w800,

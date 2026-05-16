@@ -51,6 +51,25 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!--
+	  Custom URL scheme — jobhunter://job/<id> opens the app directly.
+	  Used by transactional emails as a fallback when the device hasn't
+	  yet verified the apple-app-site-association file for Universal
+	  Links. Universal Links themselves are configured via the
+	  com.apple.developer.associated-domains entitlement (set in
+	  Runner.entitlements), not here.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.jobhunter.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>jobhunter</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

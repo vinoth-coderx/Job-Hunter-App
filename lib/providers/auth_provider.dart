@@ -6,12 +6,11 @@ import '../data/models/subscription_model.dart';
 import '../data/models/user_model.dart';
 import '../data/services/api_client.dart';
 import '../data/services/auth_service.dart';
-import '../data/services/storage_service.dart';
 import '../data/services/subscription_service.dart';
 import '../data/services/user_service.dart';
 export '../data/models/user_model.dart' show SubscriptionPlan, SubscriptionPlanX;
 
-enum AuthStatus { initial, loading, authenticated, guest, unauthenticated, error }
+enum AuthStatus { initial, loading, authenticated, unauthenticated, error }
 
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
@@ -30,20 +29,17 @@ class AuthProvider extends ChangeNotifier {
   UserModel? get user => _user;
   String? get error => _error;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
-  bool get isGuest => _status == AuthStatus.guest;
+  // Guest mode was removed; the getter stays as a deprecated shim so
+  // legacy callsites compile and naturally take the "authenticated"
+  // branch. Delete once every screen has been audited.
+  bool get isGuest => false;
   bool get isLoading => _status == AuthStatus.loading;
 
-  /// True after Google login if the user hasn't filled in basic profile
-  /// data yet — drives the mandatory onboarding gate.
-  bool get needsOnboarding {
-    if (!isAuthenticated || _user == null) return false;
-    final u = _user!;
-    final hasResume = (u.resumeText ?? '').trim().isNotEmpty;
-    final hasBasics = u.headline.trim().isNotEmpty ||
-        u.skills.isNotEmpty ||
-        u.experienceYears > 0;
-    return !(hasResume || hasBasics);
-  }
+  /// Legacy onboarding gate. The wizard was removed — new accounts now
+  /// land straight on /main and complete their profile inline from the
+  /// Profile tab (resume upload auto-fills the rest). Kept as a stable
+  /// `false` so any lingering caller compiles.
+  bool get needsOnboarding => false;
 
   List<SubscriptionPlanInfo> get plans => _plans;
   SubscriptionState get subscriptionState => _subscriptionState;
@@ -56,16 +52,6 @@ class AuthProvider extends ChangeNotifier {
   bool get lastSignInIsNewUser => _lastSignInIsNewUser;
 
   Future<void> checkAuthStatus() async {
-    // Check guest first: a guest session ALSO sets the access-token flag
-    // (it stores a JWT), so without this short-circuit guests would be
-    // misclassified as authenticated and we'd hit /auth/me — which strictly
-    // rejects guest tokens with 403.
-    if (StorageService.isGuestMode()) {
-      _user = _authService.currentUser;
-      _status = AuthStatus.guest;
-      notifyListeners();
-      return;
-    }
     if (_authService.isLoggedIn) {
       _user = _authService.currentUser;
       _status = _user != null
@@ -102,38 +88,6 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> enterGuestMode() async {
-    _status = AuthStatus.loading;
-    _error = null;
-    notifyListeners();
-    try {
-      // Backend issues a guest JWT so subsequent API calls go through the
-      // same Bearer-token path as authenticated users. If the call fails
-      // (offline, server down) we still flip into local guest mode so the
-      // user can at least open the app — feed loads will then surface the
-      // network error in their own UI.
-      _user = await _authService.loginAsGuest();
-      // Fresh session — clear the latch so a future 401 in this session
-      // can fire the redirect again.
-      ApiClient.instance.resetUnauthorizedFlag();
-    } catch (e) {
-      _user = null;
-      _error = _formatError(e);
-    }
-    await StorageService.setGuestMode(true);
-    _status = AuthStatus.guest;
-    notifyListeners();
-  }
-
-  Future<void> exitGuestMode() async {
-    // Drop the guest JWT and the cached "Guest" user record alongside the
-    // flag, otherwise checkAuthStatus would still see a logged-in shell.
-    await StorageService.logout();
-    _user = null;
-    _status = AuthStatus.unauthenticated;
-    notifyListeners();
-  }
-
   Future<bool> signInWithGoogle() async {
     _status = AuthStatus.loading;
     _error = null;
@@ -142,7 +96,6 @@ class AuthProvider extends ChangeNotifier {
       final result = await _authService.signInWithGoogle();
       _user = result.user;
       _lastSignInIsNewUser = result.isNewUser;
-      await StorageService.setGuestMode(false);
       ApiClient.instance.resetUnauthorizedFlag();
       _status = AuthStatus.authenticated;
       notifyListeners();
@@ -170,7 +123,6 @@ class AuthProvider extends ChangeNotifier {
         password: password,
       );
       _lastSignInIsNewUser = false;
-      await StorageService.setGuestMode(false);
       ApiClient.instance.resetUnauthorizedFlag();
       _status = AuthStatus.authenticated;
       notifyListeners();
@@ -202,7 +154,6 @@ class AuthProvider extends ChangeNotifier {
         phone: phone,
       );
       _lastSignInIsNewUser = true;
-      await StorageService.setGuestMode(false);
       ApiClient.instance.resetUnauthorizedFlag();
       _status = AuthStatus.authenticated;
       notifyListeners();

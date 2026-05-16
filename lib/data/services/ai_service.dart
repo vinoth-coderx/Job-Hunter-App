@@ -1,7 +1,15 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import 'storage_service.dart';
 import '../models/ai_combined_models.dart';
 import '../models/ai_field_suggestion.dart';
 import '../models/ai_quota_model.dart';
+import '../models/ats_analysis_model.dart';
 import '../models/profile_optimizer_model.dart';
+import '../models/resume_rewrite_model.dart';
 import '../models/skill_gap_model.dart';
 import 'api_client.dart';
 
@@ -18,6 +26,40 @@ class AiResponse<T> {
   final T? data;
   final AiQuota? quota;
   const AiResponse({this.data, this.quota});
+}
+
+/// Sealed-ish hierarchy for events emitted by `AiService.chatStream`.
+/// Concrete classes — Dart 3 `sealed` would be cleaner but the wider
+/// codebase still leans on simple class hierarchies.
+abstract class StreamChatEvent {
+  const StreamChatEvent();
+}
+
+/// Incremental text delta. Append `delta` to the in-flight bubble.
+class StreamChatChunk extends StreamChatEvent {
+  final String delta;
+  const StreamChatChunk(this.delta);
+}
+
+/// Final event — the model finished producing the reply. `turnId` is
+/// the stable identifier for thumbs feedback.
+class StreamChatDone extends StreamChatEvent {
+  final String reply;
+  final String turnId;
+  const StreamChatDone({required this.reply, required this.turnId});
+}
+
+/// Initial quota snapshot pushed by the server before the first chunk.
+class StreamChatQuota extends StreamChatEvent {
+  final AiQuota quota;
+  const StreamChatQuota(this.quota);
+}
+
+/// Mid-stream failure. The bubble keeps whatever deltas already arrived
+/// and the UI can surface a retry banner without tearing down state.
+class StreamChatError extends StreamChatEvent {
+  final String message;
+  const StreamChatError(this.message);
 }
 
 /// Thrown when the backend returns 429 with a quota payload. Carries the
@@ -191,6 +233,117 @@ class AiService {
     return AiResponse(data: data, quota: _quotaFromResponse(raw));
   }
 
+  /// Server-Sent Events streaming chat. Yields incremental deltas as
+  /// the model produces them, then a final event with the assembled
+  /// reply + a stable turn id so the chat UI can attach feedback.
+  ///
+  /// Quota errors land as [AiQuotaExceededException] BEFORE the stream
+  /// opens (the backend rejects with 429 + JSON body). Mid-stream
+  /// failures yield a [StreamChatError] event so the UI can render
+  /// a retry banner without tearing down the bubble.
+  Stream<StreamChatEvent> chatStream(String message) async* {
+    final base = _api.baseUrl;
+    final cleanBase = base.endsWith('/') ? base : '$base/';
+    final uri = Uri.parse('${cleanBase}ai/chat/stream');
+    final token = StorageService.getAccessToken() ?? '';
+
+    final req = http.Request('POST', uri)
+      ..headers['Accept'] = 'text/event-stream'
+      ..headers['Content-Type'] = 'application/json'
+      ..headers['Cache-Control'] = 'no-cache';
+    if (token.isNotEmpty) req.headers['Authorization'] = 'Bearer $token';
+    req.body = jsonEncode({'message': message});
+
+    final client = http.Client();
+    try {
+      final res = await client.send(req);
+      if (res.statusCode == 429) {
+        // Quota exhausted — drain the body to extract the snapshot
+        // and rethrow as the typed exception the rest of the chat
+        // surface already understands.
+        final body = await res.stream.bytesToString();
+        try {
+          final parsed = jsonDecode(body);
+          if (parsed is Map && parsed['quota'] is Map) {
+            final q = parsed['quota'] as Map;
+            throw AiQuotaExceededException(
+              reason: (parsed['reason'] ?? 'user').toString(),
+              quota: AiQuota.fromJson(q.cast<String, dynamic>()),
+              message: (parsed['message'] ?? 'AI quota exhausted').toString(),
+            );
+          }
+        } catch (_) {
+          // Fall through to generic
+        }
+        throw Exception('AI quota exhausted (429)');
+      }
+      if (res.statusCode != 200) {
+        final body = await res.stream.bytesToString();
+        throw Exception('Stream failed: ${res.statusCode} $body');
+      }
+
+      // SSE framing: events are separated by a blank line. Each event
+      // can have an `event:` line and one or more `data:` lines. Here
+      // we expect one `data:` per event so the parser is line-by-line.
+      final lines = res.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+      String? evt;
+      String dataBuf = '';
+
+      await for (final line in lines) {
+        if (line.isEmpty) {
+          if (dataBuf.isNotEmpty && evt != null) {
+            yield* _parseStreamEvent(evt, dataBuf);
+          }
+          evt = null;
+          dataBuf = '';
+          continue;
+        }
+        if (line.startsWith('event:')) {
+          evt = line.substring(6).trim();
+        } else if (line.startsWith('data:')) {
+          dataBuf = line.substring(5).trim();
+        }
+      }
+      // Flush trailing event if the stream ended without a final blank.
+      if (dataBuf.isNotEmpty && evt != null) {
+        yield* _parseStreamEvent(evt, dataBuf);
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  Stream<StreamChatEvent> _parseStreamEvent(String evt, String data) async* {
+    Map<String, dynamic>? json;
+    try {
+      final parsed = jsonDecode(data);
+      if (parsed is Map<String, dynamic>) json = parsed;
+    } catch (_) {
+      return;
+    }
+    if (json == null) return;
+    switch (evt) {
+      case 'chunk':
+        final delta = (json['delta'] ?? '').toString();
+        if (delta.isNotEmpty) yield StreamChatChunk(delta);
+        break;
+      case 'done':
+        yield StreamChatDone(
+          reply: (json['reply'] ?? '').toString(),
+          turnId: (json['turnId'] ?? '').toString(),
+        );
+        break;
+      case 'quota':
+        yield StreamChatQuota(AiQuota.fromJson(json));
+        break;
+      case 'error':
+        yield StreamChatError((json['message'] ?? 'Stream error').toString());
+        break;
+    }
+  }
+
   Future<AiResponse<AiChatResponse>> chatSend(String message) async {
     final raw = await _aiPost('ai/chat', {'message': message});
     final dataNode = raw['data'];
@@ -226,6 +379,143 @@ class AiService {
         ? AiFieldSuggestion.fromJson(dataNode)
         : null;
     return AiResponse(data: data, quota: _quotaFromResponse(raw));
+  }
+
+  /// ATS resume score. `jobId` null = generic ATS pass; otherwise scored
+  /// against that job's keyword set. Costs 1 quota slot for a fresh
+  /// analysis; cached repeats are free. Throws [AiQuotaExceededException]
+  /// when out of quota.
+  Future<AiResponse<AtsAnalysisResult>> atsScore({
+    String? jobId,
+    bool refresh = false,
+  }) async {
+    final raw = await _aiPost('ai/ats-score', {
+      if (jobId != null && jobId.isNotEmpty) 'jobId': jobId,
+      if (refresh) 'refresh': true,
+    });
+    final dataNode = raw['data'];
+    final data = (dataNode is Map<String, dynamic>)
+        ? AtsAnalysisResult.fromJson(dataNode)
+        : null;
+    return AiResponse(data: data, quota: _quotaFromResponse(raw));
+  }
+
+  /// Rewrite a single resume bullet / summary / achievement line via Groq.
+  /// Returns the primary rewrite plus 0-3 alternative phrasings.
+  /// Throws [AiQuotaExceededException] when out of quota; cache hits are
+  /// free of quota so the same input never burns a slot twice.
+  Future<AiResponse<ResumeRewriteResult>> resumeRewrite({
+    required String kind, // 'bullet' | 'summary' | 'achievement'
+    required String text,
+    String? role,
+    String? tone,
+  }) async {
+    final raw = await _aiPost('ai/resume/rewrite', {
+      'kind': kind,
+      'text': text,
+      if (role != null && role.isNotEmpty) 'role': role,
+      if (tone != null && tone.isNotEmpty) 'tone': tone,
+    });
+    final dataNode = raw['data'];
+    final data = (dataNode is Map<String, dynamic>)
+        ? ResumeRewriteResult.fromJson(dataNode)
+        : null;
+    return AiResponse(data: data, quota: _quotaFromResponse(raw));
+  }
+
+  /// Per-user AI usage history. Returns the most recent rows (default
+  /// 50, max 200) for the calling user. Powers the Flutter "my AI
+  /// activity" page so seekers can see what they've consumed without
+  /// digging through the admin dashboard.
+  Future<List<({
+    String feature,
+    String provider,
+    int totalTokens,
+    double estimatedCostUsd,
+    bool cacheHit,
+    DateTime createdAt,
+  })>> usageHistory({int limit = 50}) async {
+    final raw = await _api.get(
+      'ai/usage/history',
+      query: {'limit': '$limit'},
+    );
+    final data = ApiClient.unwrapMap(raw);
+    final list = (data['items'] as List?) ?? const [];
+    return list.whereType<Map>().map((e) {
+      final m = e.cast<String, dynamic>();
+      return (
+        feature: (m['feature'] ?? 'unknown').toString(),
+        provider: (m['provider'] ?? 'unknown').toString(),
+        totalTokens: (m['totalTokens'] as num?)?.toInt() ?? 0,
+        estimatedCostUsd:
+            (m['estimatedCostUsd'] as num?)?.toDouble() ?? 0.0,
+        cacheHit: m['cacheHit'] as bool? ?? false,
+        createdAt: DateTime.tryParse((m['createdAt'] ?? '').toString()) ??
+            DateTime.now(),
+      );
+    }).toList();
+  }
+
+  /// Persist a thumbs rating on an AI output. Generic across features
+  /// — pass the producing surface as `feature` and a stable identifier
+  /// (chat turn id, applicationId, jobId, etc.) as `refId`. Latest
+  /// rating wins on the backend (upsert). Best-effort: failures here
+  /// are intentionally swallowed so a flaky network never strands the
+  /// user with a half-rated card.
+  Future<void> sendFeedback({
+    required String feature,
+    required String refId,
+    required int rating, // -1 | 0 | 1
+    String? note,
+  }) async {
+    try {
+      await _api.post('ai/feedback', body: {
+        'feature': feature,
+        'refId': refId,
+        'rating': rating,
+        if (note != null && note.isNotEmpty) 'note': note,
+      });
+    } catch (_) {
+      // Swallow — feedback is best-effort. The optimistic UI flips
+      // back if the user re-taps, no server reconciliation needed.
+    }
+  }
+
+  /// Extract a normalised list of skills from arbitrary text (e.g. a JD
+  /// the seeker pasted in). Backend caches 7d server-side and the call
+  /// is weight 0, so repeated invocations on the same text never debit
+  /// quota.
+  Future<({List<String> skills, bool usedAi, bool cached})> extractSkills(
+    String text,
+  ) async {
+    final raw = await _aiPost('ai/skills/extract', {'text': text});
+    final node = raw['data'];
+    if (node is! Map<String, dynamic>) {
+      return (skills: const <String>[], usedAi: false, cached: false);
+    }
+    final skills = (node['skills'] as List?)
+            ?.map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList() ??
+        const <String>[];
+    return (
+      skills: skills,
+      usedAi: node['usedAi'] as bool? ?? false,
+      cached: node['cached'] as bool? ?? false,
+    );
+  }
+
+  Future<List<AtsHistoryEntry>> atsHistory({int limit = 10}) async {
+    final raw = await _aiGet(
+      'ai/ats-score/history',
+      query: {'limit': '$limit'},
+    );
+    final data = ApiClient.unwrapMap(raw);
+    final list = (data['history'] as List?) ?? const [];
+    return list
+        .whereType<Map>()
+        .map((e) => AtsHistoryEntry.fromJson(e.cast<String, dynamic>()))
+        .toList();
   }
 
   Future<AiResponse<AiGeneratedJd>> generateJd({

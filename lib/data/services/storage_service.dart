@@ -37,16 +37,6 @@ class StorageService {
     await _prefs!.remove(AppConstants.keyAccessToken);
     await _prefs!.remove(AppConstants.keyRefreshToken);
     await _prefs!.setBool(AppConstants.keyIsLoggedIn, false);
-    await _prefs!.setBool(AppConstants.keyIsGuest, false);
-  }
-
-  static Future<void> setGuestMode(bool isGuest) async {
-    await init();
-    await _prefs!.setBool(AppConstants.keyIsGuest, isGuest);
-  }
-
-  static bool isGuestMode() {
-    return _prefs?.getBool(AppConstants.keyIsGuest) ?? false;
   }
 
   static Future<void> saveTokens({
@@ -131,5 +121,35 @@ class StorageService {
 
   static bool hasSeekerOnboardingSeen() {
     return _prefs?.getBool(AppConstants.keySeekerOnboardingSeen) ?? false;
+  }
+
+  /// Persistent flag — set after the user dismisses the AI features
+  /// tour. Drives the auto-show on first home-screen visit.
+  static Future<void> setAiTourSeen() async {
+    await init();
+    await _prefs!.setBool(AppConstants.keyAiTourSeen, true);
+  }
+
+  static bool hasAiTourSeen() {
+    return _prefs?.getBool(AppConstants.keyAiTourSeen) ?? false;
+  }
+
+  /// Mark the resume parser auto-fill as having run at least once. Once
+  /// this is set, [ResumeProfileProvider.syncFromBackend] stops calling
+  /// `parseResume` on screen re-entry — otherwise a section the user
+  /// emptied by deleting all its rows would be silently refilled from
+  /// the parser output on the next open.
+  static Future<void> setResumeParserApplied() async {
+    await init();
+    await _prefs!.setBool(AppConstants.keyResumeParserApplied, true);
+  }
+
+  static Future<void> clearResumeParserApplied() async {
+    await init();
+    await _prefs!.remove(AppConstants.keyResumeParserApplied);
+  }
+
+  static bool hasResumeParserApplied() {
+    return _prefs?.getBool(AppConstants.keyResumeParserApplied) ?? false;
   }
 }

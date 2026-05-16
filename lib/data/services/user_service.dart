@@ -84,6 +84,7 @@ class UserService {
     bool? jobAlerts,
     bool? applicationUpdates,
     bool? autoApplySummary,
+    bool? aiPolish,
     String? quietHoursStart,
     String? quietHoursEnd,
   }) async {
@@ -94,6 +95,7 @@ class UserService {
       if (jobAlerts != null) 'jobAlerts': jobAlerts,
       if (applicationUpdates != null) 'applicationUpdates': applicationUpdates,
       if (autoApplySummary != null) 'autoApplySummary': autoApplySummary,
+      if (aiPolish != null) 'aiPolish': aiPolish,
       if (quietHoursStart != null) 'quietHoursStart': quietHoursStart,
       if (quietHoursEnd != null) 'quietHoursEnd': quietHoursEnd,
     };
@@ -159,6 +161,23 @@ class UserService {
   Future<List<int>> downloadResume() async {
     final res = await _api.getRaw('users/resume');
     return res.bodyBytes;
+  }
+
+  /// Branded resume PDF. Server renders the structured profile through
+  /// the Job Hunter template (Puppeteer headless) — returns raw PDF
+  /// bytes the caller writes to disk. No AI cost, but the user must
+  /// have at least a summary/skills/experience filled in or the server
+  /// 400s.
+  Future<({List<int> bytes, String filename})> downloadBrandedResumePdf() async {
+    final res = await _api.getRaw('users/resume/branded-pdf');
+    final disposition =
+        res.headers['content-disposition'] ?? res.headers['Content-Disposition'];
+    String filename = 'resume_jobhunter.pdf';
+    if (disposition != null) {
+      final m = RegExp(r'filename="?([^";]+)"?').firstMatch(disposition);
+      if (m != null) filename = m.group(1)!;
+    }
+    return (bytes: res.bodyBytes, filename: filename);
   }
 
   Future<void> deleteResume() async {

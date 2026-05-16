@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Universal Links — https://jobhunter.app/job/<id> opens the app
+	  directly on iOS when the device has fetched and verified the
+	  apple-app-site-association (AASA) file from
+	  https://jobhunter.app/.well-known/apple-app-site-association
+	  (no extension, served as application/json, no redirects).
+
+	  This file is a template. After updating the domain or app ID:
+	    1. Add Runner.entitlements to the Xcode project's
+	       "Code Signing Entitlements" build setting (open
+	       Runner.xcworkspace → target Runner → Signing & Capabilities
+	       → + Capability → Associated Domains → import this file).
+	    2. Sign in to https://developer.apple.com and enable the
+	       Associated Domains capability on the App ID.
+	    3. Re-archive and submit to TestFlight; Universal Links won't
+	       work in a debug build without the AASA file being reachable
+	       and the bundle being correctly entitled.
+	-->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:jobhunter.app</string>
+	</array>
+</dict>
+</plist>

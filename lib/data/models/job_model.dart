@@ -68,6 +68,14 @@ class Job {
   final String? education;
   final DateTime? applicationDeadline;
 
+  /// Trust signals hydrated by the job-detail endpoint (`/jobs/:id`).
+  /// Feeds the VerifiedBadge / SafeApplyBadge / FraudWarningBanner on
+  /// the job detail screen. Default to "unknown but safe" so list-shaped
+  /// payloads that don't carry these fields don't render scary banners.
+  final bool companyVerified;
+  final bool recruiterApproved;
+  final int? recruiterTrustScore;
+
   const Job({
     required this.id,
     required this.title,
@@ -101,6 +109,9 @@ class Job {
     this.openingsCount,
     this.education,
     this.applicationDeadline,
+    this.companyVerified = false,
+    this.recruiterApproved = true,
+    this.recruiterTrustScore,
   });
 
   Job copyWith({
@@ -142,6 +153,9 @@ class Job {
         openingsCount: openingsCount,
         education: education,
         applicationDeadline: applicationDeadline,
+        companyVerified: companyVerified,
+        recruiterApproved: recruiterApproved,
+        recruiterTrustScore: recruiterTrustScore,
       );
 
   /// Convenience tags used by list/detail UI: employment type + remote + skills preview.
@@ -252,6 +266,9 @@ class Job {
       openingsCount: openingsCount,
       education: education,
       applicationDeadline: applicationDeadline,
+      companyVerified: j['companyVerified'] as bool? ?? false,
+      recruiterApproved: j['recruiterApproved'] as bool? ?? true,
+      recruiterTrustScore: (j['recruiterTrustScore'] as num?)?.toInt(),
     );
   }
 

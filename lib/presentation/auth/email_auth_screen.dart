@@ -8,7 +8,11 @@ import '../../core/utils/tap_guard_mixin.dart';
 import '../../providers/auth_provider.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/app_text.dart';
+import '../widgets/auth/animated_auth_background.dart';
+import '../widgets/auth/shimmer_primary_button.dart';
+import '../widgets/auth/staggered_reveal.dart';
 import '../widgets/custom_text_field.dart';
+import 'login_screen.dart' show kAuthLogoHeroTag;
 
 /// Email + password sign-in / sign-up. Both modes go through Firebase
 /// Auth → backend `/auth/firebase` (the hybrid path), so a successful
@@ -17,7 +21,18 @@ import '../widgets/custom_text_field.dart';
 class EmailAuthScreen extends StatefulWidget {
   /// When `true`, opens in sign-up mode; otherwise sign-in.
   final bool initialSignUp;
-  const EmailAuthScreen({super.key, this.initialSignUp = false});
+
+  /// When `true`, the screen is being driven by the recruiter sign-in
+  /// flow. On success we pop with `true` instead of navigating to
+  /// `/main`, so the caller can route the user through hirer profile
+  /// setup before the regular landing page.
+  final bool forHirer;
+
+  const EmailAuthScreen({
+    super.key,
+    this.initialSignUp = false,
+    this.forHirer = false,
+  });
 
   @override
   State<EmailAuthScreen> createState() => _EmailAuthScreenState();
@@ -70,11 +85,21 @@ class _EmailAuthScreenState extends State<EmailAuthScreen>
         if (!mounted) return;
 
         if (ok) {
-          // Fresh sign-up → role picker (seeker/hirer choice gates the
-          // role-specific setup that follows). Returning sign-in lands
-          // straight on /main.
-          final dest = _isSignUp ? AppRoutes.rolePicker : AppRoutes.main;
-          Navigator.pushNamedAndRemoveUntil(context, dest, (_) => false);
+          if (widget.forHirer) {
+            // Hirer flow: caller (RecruiterLoginScreen) handles the
+            // post-auth navigation through HirerProfileSetup + switchRole.
+            // Pop with `true` so it knows auth succeeded.
+            Navigator.of(context).pop(true);
+          } else {
+            // Both fresh sign-up and returning sign-in land on /main.
+            // Sign-up accounts are created as seekers by the backend
+            // (default `activeRole='seeker'`) — no role picker.
+            Navigator.pushNamedAndRemoveUntil(
+              context,
+              AppRoutes.main,
+              (_) => false,
+            );
+          }
         } else {
           setState(() => _errorMsg = auth.error ?? 'Authentication failed');
         }
@@ -126,15 +151,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen>
         scrolledUnderElevation: 0,
         iconTheme: IconThemeData(color: context.textPrimary),
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [context.gradientTop, context.gradientBottom],
-            stops: const [0.0, 0.55],
-          ),
-        ),
+      body: AnimatedAuthBackground(
         child: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
@@ -144,64 +161,82 @@ class _EmailAuthScreenState extends State<EmailAuthScreen>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: 8),
-                  // Brand mark — same glowing badge as login screen.
+                  // Brand mark — Hero-linked from the login screen so the
+                  // badge appears to fly into place when this screen opens.
                   Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            AppColors.primary.withValues(alpha: 0.18),
-                            AppColors.primary.withValues(alpha: 0.02),
+                    child: Hero(
+                      tag: kAuthLogoHeroTag,
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              AppColors.primary.withValues(alpha: 0.22),
+                              AppColors.primary.withValues(alpha: 0.02),
+                            ],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primary.withValues(alpha: 0.18),
+                              blurRadius: 24,
+                              spreadRadius: 2,
+                            ),
                           ],
                         ),
+                        child: const AppLogo(size: 64, elevated: false),
                       ),
-                      child: const AppLogo(size: 64, elevated: false),
                     ),
                   ),
                   const SizedBox(height: 18),
                   // Heading + subtitle. AnimatedSwitcher cross-fades
                   // between modes so the change feels intentional rather
                   // than abrupt.
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 220),
-                    transitionBuilder: (child, anim) => FadeTransition(
-                      opacity: anim,
-                      child: SizeTransition(
-                        sizeFactor: anim,
-                        axisAlignment: -1,
-                        child: child,
+                  StaggeredReveal(
+                    delay: const Duration(milliseconds: 120),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 260),
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: SizeTransition(
+                          sizeFactor: anim,
+                          axisAlignment: -1,
+                          child: child,
+                        ),
                       ),
-                    ),
-                    child: Column(
-                      key: ValueKey(_isSignUp ? 'signup-head' : 'signin-head'),
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        AppText.h1(
-                          _isSignUp ? 'Create your account' : 'Welcome back',
-                          fontWeight: FontWeight.w800,
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 6),
-                        AppText.body(
-                          _isSignUp
-                              ? "A few details and we'll match you to roles in seconds."
-                              : 'Sign in to pick up where you left off.',
-                          color: context.textSecondary,
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
+                      child: Column(
+                        key:
+                            ValueKey(_isSignUp ? 'signup-head' : 'signin-head'),
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          AppText.h1(
+                            _isSignUp ? 'Create your account' : 'Welcome back',
+                            fontWeight: FontWeight.w800,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 6),
+                          AppText.body(
+                            _isSignUp
+                                ? "A few details and we'll match you to roles in seconds."
+                                : 'Sign in to pick up where you left off.',
+                            color: context.textSecondary,
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 24),
                   // Segmented mode toggle — pill at top, both labels
                   // visible so the user knows the alternative exists.
-                  _ModeToggle(
-                    isSignUp: _isSignUp,
-                    onChanged: (signUp) => _setMode(signUp: signUp),
+                  StaggeredReveal(
+                    delay: const Duration(milliseconds: 220),
+                    child: _ModeToggle(
+                      isSignUp: _isSignUp,
+                      onChanged: (signUp) => _setMode(signUp: signUp),
+                    ),
                   ),
                   const SizedBox(height: 24),
                   if (_errorMsg != null) ...[
@@ -212,56 +247,65 @@ class _EmailAuthScreenState extends State<EmailAuthScreen>
                     const SizedBox(height: 16),
                   ],
                   // Name field slides in/out with mode change.
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeInOutCubic,
-                    child: AnimatedSwitcher(
+                  StaggeredReveal(
+                    delay: const Duration(milliseconds: 320),
+                    child: AnimatedSize(
                       duration: const Duration(milliseconds: 220),
-                      transitionBuilder: (child, anim) => FadeTransition(
-                        opacity: anim,
-                        child: child,
-                      ),
-                      child: _isSignUp
-                          ? Padding(
-                              key: const ValueKey('name'),
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: CustomTextField(
-                                controller: _nameCtrl,
-                                label: 'Full name',
-                                hint: 'Your name',
-                                prefixIcon: Icons.person_outline_rounded,
-                                keyboardType: TextInputType.name,
-                                textInputAction: TextInputAction.next,
-                                validator: _validateName,
+                      curve: Curves.easeInOutCubic,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        transitionBuilder: (child, anim) => FadeTransition(
+                          opacity: anim,
+                          child: child,
+                        ),
+                        child: _isSignUp
+                            ? Padding(
+                                key: const ValueKey('name'),
+                                padding: const EdgeInsets.only(bottom: 16),
+                                child: CustomTextField(
+                                  controller: _nameCtrl,
+                                  label: 'Full name',
+                                  hint: 'Your name',
+                                  prefixIcon: Icons.person_outline_rounded,
+                                  keyboardType: TextInputType.name,
+                                  textInputAction: TextInputAction.next,
+                                  validator: _validateName,
+                                ),
+                              )
+                            : const SizedBox(
+                                key: ValueKey('no-name'),
+                                width: double.infinity,
                               ),
-                            )
-                          : const SizedBox(
-                              key: ValueKey('no-name'),
-                              width: double.infinity,
-                            ),
+                      ),
                     ),
                   ),
-                  CustomTextField(
-                    controller: _emailCtrl,
-                    label: 'Email',
-                    hint: 'name@example.com',
-                    prefixIcon: Icons.alternate_email_rounded,
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    validator: _validateEmail,
+                  StaggeredReveal(
+                    delay: const Duration(milliseconds: 380),
+                    child: CustomTextField(
+                      controller: _emailCtrl,
+                      label: 'Email',
+                      hint: 'name@example.com',
+                      prefixIcon: Icons.alternate_email_rounded,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      validator: _validateEmail,
+                    ),
                   ),
                   const SizedBox(height: 16),
-                  CustomTextField(
-                    controller: _passwordCtrl,
-                    label: 'Password',
-                    hint: _isSignUp
-                        ? 'At least 8 characters'
-                        : 'Your password',
-                    prefixIcon: Icons.lock_outline_rounded,
-                    isPassword: true,
-                    textInputAction: TextInputAction.done,
-                    validator: _validatePassword,
-                    onSubmitted: (_) => loading ? null : _submit(),
+                  StaggeredReveal(
+                    delay: const Duration(milliseconds: 440),
+                    child: CustomTextField(
+                      controller: _passwordCtrl,
+                      label: 'Password',
+                      hint: _isSignUp
+                          ? 'At least 8 characters'
+                          : 'Your password',
+                      prefixIcon: Icons.lock_outline_rounded,
+                      isPassword: true,
+                      textInputAction: TextInputAction.done,
+                      validator: _validatePassword,
+                      onSubmitted: (_) => loading ? null : _submit(),
+                    ),
                   ),
                   // Strength meter (sign-up only) or "Forgot password?"
                   // (sign-in only) — two affordances that wouldn't both
@@ -303,10 +347,13 @@ class _EmailAuthScreenState extends State<EmailAuthScreen>
                           ),
                   ),
                   const SizedBox(height: 20),
-                  _GradientPrimaryButton(
-                    label: _isSignUp ? 'Create account' : 'Sign in',
-                    loading: loading,
-                    onPressed: loading ? null : _submit,
+                  StaggeredReveal(
+                    delay: const Duration(milliseconds: 520),
+                    child: ShimmerPrimaryButton(
+                      label: _isSignUp ? 'Create account' : 'Sign in',
+                      loading: loading,
+                      onPressed: loading ? null : _submit,
+                    ),
                   ),
                   const SizedBox(height: 18),
                   // Terms only matters at account creation — quietly
@@ -494,67 +541,6 @@ class _PasswordStrengthMeter extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Primary call-to-action with a brand gradient + soft shadow. Falls
-/// back to a flat disabled state when [onPressed] is null.
-class _GradientPrimaryButton extends StatelessWidget {
-  final String label;
-  final bool loading;
-  final VoidCallback? onPressed;
-  const _GradientPrimaryButton({
-    required this.label,
-    required this.loading,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final disabled = onPressed == null;
-    return Material(
-      color: Colors.transparent,
-      child: Ink(
-        height: 56,
-        decoration: BoxDecoration(
-          gradient: disabled
-              ? null
-              : const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [AppColors.primary, Color(0xFF2F6BFF)],
-                ),
-          color: disabled ? AppColors.primary.withValues(alpha: 0.4) : null,
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          boxShadow: disabled
-              ? null
-              : [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.32),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          onTap: onPressed,
-          child: Center(
-            child: loading
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.4,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  )
-                : AppText.button(label, color: Colors.white),
-          ),
-        ),
       ),
     );
   }

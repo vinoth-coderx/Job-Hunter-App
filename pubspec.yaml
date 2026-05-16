@@ -31,6 +31,14 @@ dependencies:
   # External links
   url_launcher: ^6.3.0
 
+  # Deep links (Android App Links + iOS Universal Links). Listens for
+  # https://jobhunter.app/job/<id> taps and routes into JobDetailById.
+  # Tapping the link with the app installed opens the right screen
+  # directly; without the app the OS / browser falls back to the
+  # https URL, which we land on the marketing page with Play Store /
+  # App Store buttons.
+  app_links: ^6.3.2
+
   # In-app browser for the official Apply page
   webview_flutter: ^4.10.0
 
@@ -44,13 +52,21 @@ dependencies:
   speech_to_text: ^7.0.0
   permission_handler: ^11.3.1
 
-  # Location (auto-detect city for "Jobs in <city>" section)
+  # Location (auto-detect city for "Jobs in <city>" section + reverse
+  # geocoding for the profile location autocomplete).
   geolocator: ^13.0.2
   geocoding: ^3.0.0
 
   # File picking (resume upload)
   file_picker: ^8.1.2
   path_provider: ^2.1.4
+
+  # System share sheet — used to "Download" generated PDFs (resume
+  # templates) to user-visible storage. On Android the app sandbox is
+  # invisible to the File Manager, so a Share sheet that routes the
+  # bytes to Files / Drive / Downloads is the cleanest cross-platform
+  # path. iOS also benefits (AirDrop / Mail / Save to Files).
+  share_plus: ^10.0.2
 
   # In-app PDF preview for the resume viewer modal.
   # Uses PDFium via FFI rather than a PlatformView, so it renders reliably
@@ -83,3 +99,4 @@ flutter:
   assets:
     - assets/images/
     - assets/icons/
+    - assets/data/

@@ -5,6 +5,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../providers/ai_quota_provider.dart';
 import '../../widgets/app_text.dart';
+import 'ai_topup_sheet.dart';
 
 /// App-wide AI quota banner. Renders nothing when the user has plenty of
 /// quota left; switches between two states otherwise:
@@ -120,6 +121,32 @@ class _ExhaustedBanner extends StatelessWidget {
                 ),
               ),
               const Spacer(),
+              if (!globalCap)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: InkWell(
+                    borderRadius: AppRadius.smRadius,
+                    onTap: () async {
+                      final newBalance = await AiTopUpSheet.show(context);
+                      if (newBalance != null && newBalance > 0) {
+                        await provider.refresh();
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: AppColors.urgent),
+                        borderRadius: AppRadius.smRadius,
+                      ),
+                      child: AppText.button(
+                        'Buy credits',
+                        color: AppColors.urgent,
+                      ),
+                    ),
+                  ),
+                ),
               if (onUpgradeTap != null)
                 InkWell(
                   borderRadius: AppRadius.smRadius,

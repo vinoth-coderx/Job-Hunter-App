@@ -1,3 +1,123 @@
+/// AI-suggested candidate from the hirer's PAST applicant pool. These
+/// are users who applied to one of the hirer's other jobs but not to
+/// THIS job — surfaced so the hirer can proactively reach out. Mirrors
+/// the decorated payload from `suggestJobCandidates` (the AI score plus
+/// the user's profile fields the UI needs).
+class SuggestedCandidate {
+  final String userId;
+  final int score;
+  final int rank;
+  final String summary;
+  final List<String> strengths;
+  final List<String> concerns;
+  final String fullName;
+  final String? headline;
+  final String? avatar;
+  final int? experienceYears;
+  final List<String> topSkills;
+  final DateTime? lastSeenAt;
+
+  const SuggestedCandidate({
+    required this.userId,
+    required this.score,
+    required this.rank,
+    required this.summary,
+    required this.strengths,
+    required this.concerns,
+    required this.fullName,
+    this.headline,
+    this.avatar,
+    this.experienceYears,
+    this.topSkills = const [],
+    this.lastSeenAt,
+  });
+
+  factory SuggestedCandidate.fromJson(Map<String, dynamic> j) =>
+      SuggestedCandidate(
+        userId: (j['userId'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        rank: (j['rank'] as num?)?.toInt() ?? 0,
+        summary: (j['summary'] ?? '').toString(),
+        strengths: (j['strengths'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        concerns: (j['concerns'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        fullName: (j['fullName'] ?? 'Candidate').toString(),
+        headline: j['headline'] as String?,
+        avatar: j['avatar'] as String?,
+        experienceYears: (j['experienceYears'] as num?)?.toInt(),
+        topSkills: (j['topSkills'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        lastSeenAt: j['lastSeenAt'] == null
+            ? null
+            : DateTime.tryParse(j['lastSeenAt'].toString()),
+      );
+
+  String get band {
+    if (score >= 90) return 'Exceptional';
+    if (score >= 75) return 'Strong';
+    if (score >= 60) return 'Marginal';
+    return 'Weak';
+  }
+}
+
+/// One row of the AI-ranked applicant list. Mirrors
+/// `services/ai/applicantRanker.service.ts:RankedApplicant`. Keyed by
+/// `applicationId` so the hirer UI can merge it into the existing
+/// `Applicant` cards without re-fetching the list.
+class RankedApplicant {
+  final String applicationId;
+  final int aiScore;
+  final int rank;
+  final String summary;
+  final List<String> strengths;
+  final List<String> concerns;
+
+  const RankedApplicant({
+    required this.applicationId,
+    required this.aiScore,
+    required this.rank,
+    required this.summary,
+    required this.strengths,
+    required this.concerns,
+  });
+
+  factory RankedApplicant.fromJson(Map<String, dynamic> j) => RankedApplicant(
+        applicationId: (j['applicationId'] ?? '').toString(),
+        aiScore: (j['aiScore'] as num?)?.toInt() ?? 0,
+        rank: (j['rank'] as num?)?.toInt() ?? 0,
+        summary: (j['summary'] ?? '').toString(),
+        strengths: (j['strengths'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        concerns: (j['concerns'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+      );
+
+  /// Bucket label for the badge — same bands the backend prompt uses.
+  String get band {
+    if (aiScore >= 90) return 'Exceptional';
+    if (aiScore >= 75) return 'Strong';
+    if (aiScore >= 60) return 'Marginal';
+    if (aiScore >= 40) return 'Weak';
+    return 'Poor';
+  }
+}
+
 /// Hirer-side view of an Application + its applicant.
 class Applicant {
   final String applicationId;
@@ -15,6 +135,14 @@ class Applicant {
   final List<StatusHistoryEntry> statusHistory;
   final ApplicantSeeker? seeker;
   final ApplicantJobSnapshot? jobSnapshot;
+  /// Privacy hints from the backend so the hirer UI can show "contact
+  /// hidden until shortlisted" pills + disable the "download resume"
+  /// button when the seeker turned downloads off.
+  final ApplicantPrivacy? seekerPrivacy;
+  /// Persisted AI ranking from the last "Rank with AI" run. Lets the
+  /// detail screen surface strengths/concerns without requiring the
+  /// hirer to re-rank from the list view.
+  final ApplicantAiRanking? aiRanking;
 
   const Applicant({
     required this.applicationId,
@@ -32,6 +160,8 @@ class Applicant {
     this.statusHistory = const [],
     this.seeker,
     this.jobSnapshot,
+    this.seekerPrivacy,
+    this.aiRanking,
   });
 
   factory Applicant.fromJson(Map<String, dynamic> j) => Applicant(
@@ -65,6 +195,83 @@ class Applicant {
             ? ApplicantJobSnapshot.fromJson(
                 j['jobSnapshot'] as Map<String, dynamic>)
             : null,
+        seekerPrivacy: j['seekerPrivacy'] is Map<String, dynamic>
+            ? ApplicantPrivacy.fromJson(
+                j['seekerPrivacy'] as Map<String, dynamic>)
+            : null,
+        aiRanking: j['aiRanking'] is Map<String, dynamic>
+            ? ApplicantAiRanking.fromJson(
+                j['aiRanking'] as Map<String, dynamic>)
+            : null,
+      );
+}
+
+/// Snapshot of the most recent AI ranking persisted on the application.
+/// Mirrors the backend `AppliedJob.aiRanking` subdoc — kept separate from
+/// `RankedApplicant` (which is the list-view DTO) so the detail screen
+/// doesn't need to reach into the hirer ranker's payload shape.
+class ApplicantAiRanking {
+  final int score;
+  final int rank;
+  final String summary;
+  final List<String> strengths;
+  final List<String> concerns;
+  final DateTime? rankedAt;
+
+  const ApplicantAiRanking({
+    required this.score,
+    required this.rank,
+    required this.summary,
+    required this.strengths,
+    required this.concerns,
+    required this.rankedAt,
+  });
+
+  factory ApplicantAiRanking.fromJson(Map<String, dynamic> j) =>
+      ApplicantAiRanking(
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        rank: (j['rank'] as num?)?.toInt() ?? 0,
+        summary: (j['summary'] ?? '').toString(),
+        strengths: (j['strengths'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        concerns: (j['concerns'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        rankedAt: j['rankedAt'] == null
+            ? null
+            : DateTime.tryParse(j['rankedAt'].toString()),
+      );
+
+  String get band {
+    if (score >= 90) return 'Exceptional';
+    if (score >= 75) return 'Strong';
+    if (score >= 60) return 'Marginal';
+    if (score >= 40) return 'Weak';
+    return 'Poor';
+  }
+}
+
+class ApplicantPrivacy {
+  final bool contactRevealed;
+  final bool hideContactUntilShortlisted;
+  final bool allowResumeDownload;
+
+  const ApplicantPrivacy({
+    required this.contactRevealed,
+    required this.hideContactUntilShortlisted,
+    required this.allowResumeDownload,
+  });
+
+  factory ApplicantPrivacy.fromJson(Map<String, dynamic> j) => ApplicantPrivacy(
+        contactRevealed: j['contactRevealed'] as bool? ?? true,
+        hideContactUntilShortlisted:
+            j['hideContactUntilShortlisted'] as bool? ?? false,
+        allowResumeDownload: j['allowResumeDownload'] as bool? ?? true,
       );
 }
 

@@ -4,6 +4,7 @@ import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 import '../models/subscription_model.dart';
 import '../models/user_model.dart';
+import 'ai_topup_service.dart';
 import 'subscription_service.dart';
 
 class RazorpayCheckoutResult {
@@ -122,4 +123,95 @@ class RazorpayCheckoutService {
   }
 
   void dispose() => _razorpay.clear();
+
+  /// AI credit top-up checkout. Same harness as [startCheckout] but
+  /// points at the AI top-up endpoints and returns the granted credits
+  /// + new pack balance instead of a subscription record.
+  Future<AiTopUpCheckoutResult> startAiTopUpCheckout({
+    required AiTopUpPack pack,
+    required String userEmail,
+    required String userName,
+    String? userPhone,
+  }) async {
+    final svc = AiTopUpService.instance;
+    final AiTopUpOrder order;
+    try {
+      order = await svc.createOrder(pack.id);
+    } catch (e) {
+      return AiTopUpCheckoutResult.failure('Could not create order: $e');
+    }
+
+    final completer = Completer<AiTopUpCheckoutResult>();
+
+    void onSuccess(PaymentSuccessResponse r) async {
+      _razorpay.clear();
+      if (r.orderId == null || r.paymentId == null || r.signature == null) {
+        completer.complete(
+          const AiTopUpCheckoutResult.failure('Incomplete payment response'),
+        );
+        return;
+      }
+      try {
+        final result = await svc.verifyPayment(
+          orderId: r.orderId!,
+          paymentId: r.paymentId!,
+          signature: r.signature!,
+        );
+        completer.complete(AiTopUpCheckoutResult.success(result));
+      } catch (e) {
+        completer.complete(
+          AiTopUpCheckoutResult.failure('Verification failed: $e'),
+        );
+      }
+    }
+
+    void onError(PaymentFailureResponse r) {
+      _razorpay.clear();
+      completer.complete(
+        AiTopUpCheckoutResult.failure(r.message ?? 'Payment failed'),
+      );
+    }
+
+    void onWallet(ExternalWalletResponse _) {}
+
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, onSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, onError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, onWallet);
+
+    final options = <String, dynamic>{
+      'key': order.keyId,
+      'amount': order.amount,
+      'currency': order.currency,
+      'order_id': order.orderId,
+      'name': 'Job Hunter',
+      'description': '${pack.credits} AI credits',
+      'prefill': {
+        'email': userEmail,
+        'name': userName,
+        if (userPhone != null && userPhone.isNotEmpty) 'contact': userPhone,
+      },
+      'theme': {'color': '#2D7BFF'},
+    };
+
+    try {
+      _razorpay.open(options);
+    } catch (e) {
+      _razorpay.clear();
+      return AiTopUpCheckoutResult.failure('Could not open checkout: $e');
+    }
+
+    return completer.future;
+  }
+}
+
+class AiTopUpCheckoutResult {
+  final bool success;
+  final String? message;
+  final AiTopUpResult? grant;
+  const AiTopUpCheckoutResult.success(this.grant)
+      : success = true,
+        message = null;
+  const AiTopUpCheckoutResult.failure(this.message)
+      : success = false,
+        grant = null;
 }

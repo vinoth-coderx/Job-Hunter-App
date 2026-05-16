@@ -7,11 +7,14 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/models/hirer_profile_model.dart';
+import '../../data/services/hirer_service.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/hirer_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/header_action_button.dart';
+import '../widgets/trust_badges.dart';
+import 'verification_screen.dart';
 
 /// Landing screen for the Hirer side of the app.
 /// First-time hirers see a "set up company" CTA.
@@ -40,7 +43,9 @@ class _HirerDashboardScreenState extends State<HirerDashboardScreen> {
     });
   }
 
-  Future<void> _refresh() => context.read<HirerProvider>().load();
+  Future<void> _refresh() async {
+    await context.read<HirerProvider>().load();
+  }
 
   /// Push the post-job flow and refresh dashboard stats when it returns.
   /// IndexedStack keeps the dashboard mounted across tab switches, so
@@ -191,12 +196,44 @@ class _HirerDashboardScreenState extends State<HirerDashboardScreen> {
 
   Widget _dashboardBody(BuildContext context, HirerProvider prov) {
     final stats = prov.stats;
+    final profile = prov.profile!;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
       children: [
-        _companyCard(context, prov.profile!),
+        _companyCard(context, profile),
+        if (profile.approvalStatus != 'approved')
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: _ApprovalBanner(
+              status: profile.approvalStatus,
+              onAction: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const HirerVerificationScreen(),
+                ),
+              ),
+            ),
+          ),
+        if (profile.approvalStatus == 'approved' && !profile.verification.isVerified)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: _VerifyPromptCard(
+              trustScore: profile.trustScore,
+              dailyLimit: profile.dailyPostLimit,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const HirerVerificationScreen(),
+                ),
+              ),
+            ),
+          ),
         const SizedBox(height: 16),
         _statsGrid(context, stats),
+        const SizedBox(height: 16),
+        const _AttentionCard(),
+        const SizedBox(height: 16),
+        const _AiDigestCard(),
         const SizedBox(height: 24),
         _SectionHeader('Quick actions'),
         const SizedBox(height: 12),
@@ -699,6 +736,496 @@ class _PerkChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ApprovalBanner extends StatelessWidget {
+  const _ApprovalBanner({required this.status, required this.onAction});
+  final String status;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    late final Color bg;
+    late final Color fg;
+    late final IconData icon;
+    late final String title;
+    late final String body;
+    late final String cta;
+    switch (status) {
+      case 'banned':
+        bg = AppColors.urgentBg;
+        fg = AppColors.urgent;
+        icon = Icons.block;
+        title = 'Account banned';
+        body = 'You can\'t post new jobs. Contact support for details.';
+        cta = 'Verify company';
+        break;
+      case 'suspended':
+        bg = AppColors.urgentBg;
+        fg = AppColors.urgent;
+        icon = Icons.pause_circle_filled;
+        title = 'Account suspended';
+        body = 'Resolve open reports before posting again.';
+        cta = 'Verify company';
+        break;
+      default:
+        bg = const Color(0xFFFFF3E0);
+        fg = const Color(0xFFC2570D);
+        icon = Icons.hourglass_top_outlined;
+        title = 'Pending review';
+        body = 'Verify your company to unlock posting and the Verified badge.';
+        cta = 'Verify now';
+    }
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: fg.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: fg),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: AppTextStyles.bodyMedium
+                        .copyWith(fontWeight: FontWeight.w700, color: fg)),
+                const SizedBox(height: 2),
+                Text(body,
+                    style: AppTextStyles.bodySmall.copyWith(color: fg)),
+              ],
+            ),
+          ),
+          TextButton(onPressed: onAction, child: Text(cta)),
+        ],
+      ),
+    );
+  }
+}
+
+class _VerifyPromptCard extends StatelessWidget {
+  const _VerifyPromptCard({
+    required this.trustScore,
+    required this.dailyLimit,
+    required this.onTap,
+  });
+  final int trustScore;
+  final int dailyLimit;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: context.surface,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.verified_outlined,
+                  color: AppColors.primary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Get verified to scale your hiring',
+                      style: AppTextStyles.bodyMedium
+                          .copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Daily limit: $dailyLimit jobs · Verification raises your limit & shows the green badge.',
+                    style: AppTextStyles.bodySmall
+                        .copyWith(color: context.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            TrustScorePill(score: trustScore),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Auto-fetched AI weekly digest card. Renders a one-line headline +
+/// up to 4 next-action bullets sourced from the hirer's last-7-day
+/// activity. Server-side cache means visits within 24h are quota-free,
+/// so we just fire the GET on mount and trust the backend dedup.
+class _AiDigestCard extends StatefulWidget {
+  const _AiDigestCard();
+
+  @override
+  State<_AiDigestCard> createState() => _AiDigestCardState();
+}
+
+class _AiDigestCardState extends State<_AiDigestCard> {
+  bool _loading = true;
+  String? _headline;
+  List<String> _bullets = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await HirerService.instance.getDigest();
+      if (!mounted) return;
+      setState(() {
+        _headline = res.headline;
+        _bullets = res.bullets;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      // Silent failure — the dashboard has plenty else to show.
+      setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return Container(
+        height: 96,
+        decoration: BoxDecoration(
+          color: context.surface,
+          borderRadius: AppRadius.lgRadius,
+          border: Border.all(color: context.cardBorder),
+        ),
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    final headline = _headline;
+    if (headline == null || headline.isEmpty) {
+      // Backend returned nothing useful — hide the card entirely so the
+      // dashboard doesn't carry empty surface area.
+      return const SizedBox.shrink();
+    }
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primary.withValues(alpha: 0.10),
+            AppColors.primary.withValues(alpha: 0.04),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: AppRadius.lgRadius,
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.20),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome,
+                  size: 16, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                'WEEKLY DIGEST',
+                style: AppTextStyles.labelSmall.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            headline,
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: context.textPrimary,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+          if (_bullets.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (final b in _bullets)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, right: 8),
+                      child: Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(
+                          color: AppColors.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        b,
+                        style: AppTextStyles.bodySmall.copyWith(
+                          color: context.textPrimary,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "Needs attention" card. Pure data aggregation, no AI cost — surfaces
+/// the four pipeline blockers we know how to count: pending appeals,
+/// flagged listings, unreviewed strong matches, and stale jobs. Renders
+/// nothing while loading or when total === 0 so the dashboard layout
+/// stays clean.
+class _AttentionCard extends StatefulWidget {
+  const _AttentionCard();
+
+  @override
+  State<_AttentionCard> createState() => _AttentionCardState();
+}
+
+class _AttentionCardState extends State<_AttentionCard> {
+  Map<String, dynamic>? _data;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await HirerService.instance.getAttention();
+      if (!mounted) return;
+      setState(() {
+        _data = res;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading || _data == null) return const SizedBox.shrink();
+    final data = _data!;
+    final total = (data['total'] as num?)?.toInt() ?? 0;
+    if (total == 0) return const SizedBox.shrink();
+
+    final rows = <_AttentionRowSpec>[];
+    void addRow({
+      required String key,
+      required String label,
+      required IconData icon,
+      required Color color,
+      required VoidCallback? onTap,
+    }) {
+      final raw = data[key];
+      if (raw is! Map) return;
+      final count = (raw['count'] as num?)?.toInt() ?? 0;
+      if (count == 0) return;
+      final top = raw['topItem'];
+      final topLabel =
+          top is Map ? (top['label'] ?? '').toString() : '';
+      rows.add(
+        _AttentionRowSpec(
+          icon: icon,
+          color: color,
+          label: label,
+          count: count,
+          topLabel: topLabel,
+          onTap: onTap,
+        ),
+      );
+    }
+
+    addRow(
+      key: 'moderationAppeals',
+      label: 'Pending moderation appeals',
+      icon: Icons.gavel_outlined,
+      color: AppColors.warning,
+      onTap: null,
+    );
+    addRow(
+      key: 'moderationFlagged',
+      label: 'Listings flagged by moderation',
+      icon: Icons.gpp_bad_outlined,
+      color: AppColors.urgent,
+      onTap: () =>
+          Navigator.pushNamed(context, AppRoutes.hirerManageJobs),
+    );
+    addRow(
+      key: 'unreviewedTopMatches',
+      label: 'Strong matches not yet reviewed',
+      icon: Icons.auto_awesome,
+      color: AppColors.primary,
+      onTap: () =>
+          Navigator.pushNamed(context, AppRoutes.hirerApplicants),
+    );
+    addRow(
+      key: 'staleJobs',
+      label: 'Stale jobs with no recent applicants',
+      icon: Icons.schedule_rounded,
+      color: AppColors.info,
+      onTap: () =>
+          Navigator.pushNamed(context, AppRoutes.hirerManageJobs),
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: context.surface,
+        borderRadius: AppRadius.lgRadius,
+        border: Border.all(color: context.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.priority_high_rounded,
+                  size: 16, color: AppColors.urgent),
+              const SizedBox(width: 6),
+              Text(
+                'Needs your attention',
+                style: AppTextStyles.labelSmall.copyWith(
+                  color: AppColors.urgent,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.urgent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '$total',
+                  style: AppTextStyles.labelSmall.copyWith(
+                    color: AppColors.urgent,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          for (int i = 0; i < rows.length; i++) ...[
+            if (i > 0) Divider(color: context.cardBorder, height: 14),
+            _AttentionRow(spec: rows[i]),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AttentionRowSpec {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final int count;
+  final String topLabel;
+  final VoidCallback? onTap;
+  const _AttentionRowSpec({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.count,
+    required this.topLabel,
+    required this.onTap,
+  });
+}
+
+class _AttentionRow extends StatelessWidget {
+  final _AttentionRowSpec spec;
+  const _AttentionRow({required this.spec});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: spec.onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Icon(spec.icon, size: 16, color: spec.color),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${spec.count} · ${spec.label}',
+                    style: AppTextStyles.bodyMedium.copyWith(
+                      color: context.textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (spec.topLabel.isNotEmpty)
+                    Text(
+                      spec.topLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: context.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (spec.onTap != null)
+              Icon(Icons.chevron_right,
+                  size: 18, color: context.textTertiary),
+          ],
+        ),
       ),
     );
   }

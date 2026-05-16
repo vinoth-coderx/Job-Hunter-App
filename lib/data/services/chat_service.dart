@@ -83,6 +83,27 @@ class ChatService {
   Future<void> markRead(String conversationId) =>
       _api.put('conversations/$conversationId/read');
 
+  /// AI smart-reply suggestions for the hirer's composer. Reads the
+  /// last 8 turns of the conversation server-side and returns 3 short
+  /// reply variants. Cached server-side (1h, hash of last 6 turns) so
+  /// scrolling through a long thread stays free of quota.
+  ///
+  /// Returns an empty list on failure — smart-reply is optional UX,
+  /// never block the composer if the model is down.
+  Future<List<String>> smartReplies(String conversationId) async {
+    try {
+      final raw = await _api.get('conversations/$conversationId/smart-replies');
+      final data = ApiClient.unwrapMap(raw);
+      return (data['suggestions'] as List?)
+              ?.map((e) => e.toString())
+              .where((s) => s.isNotEmpty)
+              .toList() ??
+          const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   // ── Socket.IO ───────────────────────────────────────────────────
 
   io.Socket? _socket;

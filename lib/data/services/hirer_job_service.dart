@@ -59,4 +59,76 @@ class HirerJobService {
     final raw = await _api.get('hirer/jobs/$id/analytics');
     return ApiClient.unwrapMap(raw);
   }
+
+  /// Hirer-side appeal against an auto/admin moderation rejection. Returns
+  /// the new appeal status from the backend (always 'pending' on success,
+  /// since the admin reviews asynchronously).
+  Future<String> appealModeration({
+    required String jobId,
+    required String reason,
+  }) async {
+    final raw = await _api.post(
+      'hirer/jobs/$jobId/moderation/appeal',
+      body: {'reason': reason},
+    );
+    final data = ApiClient.unwrapMap(raw);
+    return (data['appealStatus'] as String?) ?? 'pending';
+  }
+
+  /// AI polish for the JD draft. Returns the rewritten body + a short
+  /// list of changes applied. Cached server-side (24h) by hash(title +
+  /// description), so re-clicking on an unchanged draft is free.
+  Future<({String polished, List<String> changes, bool cached, bool usedAi})>
+      polishJd({
+    required String title,
+    required String description,
+  }) async {
+    final raw = await _api.post(
+      'hirer/jobs/polish',
+      body: {'title': title, 'description': description},
+    );
+    final data = ApiClient.unwrapMap(raw);
+    return (
+      polished: (data['polished'] ?? description).toString(),
+      changes: (data['changes'] as List?)
+              ?.map((e) => e.toString())
+              .where((s) => s.isNotEmpty)
+              .toList() ??
+          const <String>[],
+      cached: data['cached'] as bool? ?? false,
+      usedAi: data['usedAi'] as bool? ?? false,
+    );
+  }
+
+  /// AI screening-question generator. Returns 3-5 ready-to-edit questions
+  /// in `IScreeningQuestion` shape so the post-job editor can drop them
+  /// straight into its working list. Cached server-side by (title +
+  /// skills + description prefix), so re-clicking on an unchanged draft
+  /// is free of quota.
+  Future<({List<Map<String, dynamic>> questions, bool usedAi, bool cached})>
+      generateScreeningQuestions({
+    required String title,
+    required String description,
+    required List<String> skills,
+  }) async {
+    final raw = await _api.post(
+      'hirer/jobs/screening-questions',
+      body: {
+        'title': title,
+        'description': description,
+        'skills': skills,
+      },
+    );
+    final data = ApiClient.unwrapMap(raw);
+    final list = (data['questions'] as List?) ?? const [];
+    final questions = list
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList();
+    return (
+      questions: questions,
+      usedAi: data['usedAi'] as bool? ?? false,
+      cached: data['cached'] as bool? ?? false,
+    );
+  }
 }

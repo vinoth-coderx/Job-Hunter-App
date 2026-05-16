@@ -27,18 +27,68 @@ class EmailVerificationBanner extends StatefulWidget {
       _EmailVerificationBannerState();
 }
 
-class _EmailVerificationBannerState extends State<EmailVerificationBanner> {
+class _EmailVerificationBannerState extends State<EmailVerificationBanner>
+    with WidgetsBindingObserver {
   static const _dismissKey = 'email_verify_banner_dismissed_until_v1';
   static const _snoozeDuration = Duration(hours: 24);
 
   bool _hidden = false;
   bool _checked = false;
   bool _busy = false;
+  // Silent auto-poll latch — prevents the resume listener from firing a
+  // refresh while a manual "I've verified" tap is already in flight, and
+  // avoids overlapping refresh calls during quick foreground/background
+  // cycles.
+  bool _silentRefreshInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadDismissState();
+    // First silent refresh on mount — handles the case where the user
+    // verified on another device while this app was closed: by the time
+    // the banner renders, the User document is already fresh.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _silentRefresh());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning from background is the most likely moment a verification
+    // landed (user tapped the email link, then alt-tabbed back to the
+    // app). Silent refresh hides the banner without the user having to
+    // touch "I've verified".
+    if (state == AppLifecycleState.resumed) {
+      _silentRefresh();
+    }
+  }
+
+  /// Background re-check that flips the banner off without any UI noise
+  /// when verification has completed elsewhere. Distinct from
+  /// [_checkVerified] which is user-initiated and surfaces success /
+  /// "not yet" snackbars.
+  Future<void> _silentRefresh() async {
+    if (!mounted) return;
+    if (_silentRefreshInFlight || _busy) return;
+    // Skip the network round-trip while the banner is already hidden
+    // (verified user or snoozed) — nothing to flip.
+    final auth = context.read<AuthProvider>();
+    final user = auth.user;
+    if (user == null || user.isEmailVerified || _hidden) return;
+    _silentRefreshInFlight = true;
+    try {
+      await auth.refreshEmailVerifiedStatus();
+    } catch (_) {
+      /* swallow — banner stays, user can still tap "I've verified" */
+    } finally {
+      _silentRefreshInFlight = false;
+    }
   }
 
   Future<void> _loadDismissState() async {

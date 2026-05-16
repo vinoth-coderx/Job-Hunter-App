@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
+import '../../data/models/user_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/hirer_provider.dart';
 import '../../providers/job_provider.dart';
-import '../../providers/resume_profile_provider.dart';
 import '../../providers/theme_provider.dart';
-import '../main_navigation/role_switch_splash.dart';
 import '../widgets/app_avatar.dart';
+import 'security_screen.dart';
+import 'resume_template_picker_screen.dart';
+import 'seeker_essentials_screen.dart';
 import 'share_profile_sheet.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -28,29 +31,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
-  /// Toggle the active role. All the work — the network call, the
-  /// "Make it yours" onboarding gate, and the company-setup bounce
-  /// for first-time hirers — lives inside [RoleSwitchSplash] now, so
-  /// this handler just hands off the target role and lets the splash
-  /// drive the transition end-to-end. The wrapper screen listens to
-  /// AuthProvider, so once the splash retires the new shell renders
-  /// in place without an extra route push.
-  Future<void> _handleSwitchRole(
-    BuildContext context,
-    AuthProvider auth,
-  ) async {
-    final target = auth.isHirerMode ? 'seeker' : 'hirer';
-    await RoleSwitchSplash.show(context, targetRole: target);
-  }
-
   @override
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
     final user = authProvider.user;
     final isGuest = authProvider.isGuest;
     final isHirer = authProvider.isHirerMode;
-    final resumeProfile = context.watch<ResumeProfileProvider>().profile;
-    final completion = isGuest ? 0 : resumeProfile.completionPercent;
+    // Profile completeness now derives from the flat User profile fields
+    // (resume + skills + roles + locations + headline + experience). The
+    // old nested Naukri-style resumeProfile is gone; each filled essential
+    // adds equal weight so the ring stays meaningful for matching.
+    final completion = (isGuest || user == null) ? 0 : _seekerCompletion(user);
     final hirerProfile =
         isHirer ? context.watch<HirerProvider>().profile : null;
 
@@ -100,14 +91,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ],
                     ),
                   ),
-                  if (!isGuest) ...[
-                    _RoleToggle(
-                      isHirer: isHirer,
-                      onSwitch: () =>
-                          _handleSwitchRole(context, authProvider),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
                   _HeaderIconButton(
                     icon: Icons.ios_share_rounded,
                     tooltip: 'Share profile',
@@ -160,26 +143,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ],
                   const SizedBox(height: 28),
 
-                  // Account section — shown in both modes. Messages is now
-                  // a dedicated bottom-nav tab; it lives there, not here.
-                  _SectionTitle('Account',
-                      icon: Icons.manage_accounts_rounded),
-                  const SizedBox(height: 10),
-                  _SectionCard(
-                    children: [
-                      _AccountTile(
-                        icon: Icons.person_outline_rounded,
-                        title: 'Personal Information',
-                        subtitle: 'Name, phone, age & contact',
-                        locked: isGuest,
-                        onTap: isGuest
-                            ? () => _showLoginPrompt(context)
-                            : () => Navigator.pushNamed(
-                                context, AppRoutes.profileInformation),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
+                  // Seeker essentials — single tile that opens a dedicated
+                  // screen for resume upload + flat profile editing. Lives
+                  // on its own screen so the Profile tab stays focused on
+                  // account/settings rather than the matching essentials.
+                  if (!isHirer && !isGuest && user != null) ...[
+                    _SectionTitle('Resume & Essentials',
+                        icon: Icons.description_rounded),
+                    const SizedBox(height: 10),
+                    _SectionCard(
+                      children: [
+                        _AccountTile(
+                          icon: Icons.assignment_ind_outlined,
+                          title: 'My resume & essentials',
+                          subtitle: 'Upload · auto-fill · edit chips',
+                          trailingText: '$completion%',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const SeekerEssentialsScreen(),
+                            ),
+                          ),
+                        ),
+                        const _Divider(),
+                        _AccountTile(
+                          icon: Icons.dashboard_customize_outlined,
+                          title: 'Resume templates',
+                          subtitle: 'Pick a design and preview with your data',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const ResumeTemplatePickerScreen(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                  ],
 
                   // Company section — hirer-only. Company profile + the
                   // employer-side analytics live here so the profile tab
@@ -232,21 +234,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     _SectionCard(
                       children: [
                         _AccountTile(
-                          icon: Icons.assignment_ind_outlined,
-                          title: 'My Resume Profile',
-                          subtitle: 'Skills, experience & education',
-                          trailingText: isGuest ? null : '$completion%',
-                          trailingColor: _completionColor(completion),
-                          showProgress: !isGuest,
-                          progress: completion / 100,
-                          locked: isGuest,
-                          onTap: isGuest
-                              ? () => _showLoginPrompt(context)
-                              : () => Navigator.pushNamed(
-                                  context, AppRoutes.resumeProfile),
-                        ),
-                        const _Divider(),
-                        _AccountTile(
                           icon: Icons.auto_fix_high_rounded,
                           title: 'Profile coach',
                           subtitle: 'AI suggestions to improve your profile',
@@ -266,6 +253,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ? () => _showLoginPrompt(context)
                               : () => Navigator.pushNamed(
                                   context, AppRoutes.skillGap),
+                        ),
+                        const _Divider(),
+                        _AccountTile(
+                          icon: Icons.fact_check_outlined,
+                          title: 'ATS resume score',
+                          subtitle:
+                              'Score your resume + spot missing keywords',
+                          locked: isGuest,
+                          onTap: isGuest
+                              ? () => _showLoginPrompt(context)
+                              : () => Navigator.pushNamed(
+                                  context, AppRoutes.atsScore),
+                        ),
+                        const _Divider(),
+                        _AccountTile(
+                          icon: Icons.support_agent_rounded,
+                          title: 'Career assistant',
+                          subtitle:
+                              'Chat for resume, interview, salary advice',
+                          locked: isGuest,
+                          onTap: isGuest
+                              ? () => _showLoginPrompt(context)
+                              : () => Navigator.pushNamed(
+                                  context, AppRoutes.aiAssistant),
                         ),
                         const _Divider(),
                       ],
@@ -362,6 +373,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             context.watch<ThemeProvider>().mode),
                         onTap: () => _showThemePicker(context),
                       ),
+                      const _Divider(),
+                      _AccountTile(
+                        icon: Icons.shield_outlined,
+                        title: 'Security & Privacy',
+                        subtitle:
+                            '2FA, sessions, resume privacy & access log',
+                        locked: isGuest,
+                        onTap: isGuest
+                            ? () => _showLoginPrompt(context)
+                            : () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const SecurityScreen(),
+                                  ),
+                                ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -402,12 +429,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Color _completionColor(int percent) {
-    if (percent >= 80) return AppColors.success;
-    if (percent >= 50) return AppColors.warning;
-    return AppColors.urgent;
-  }
-
   void _showLoginPrompt(BuildContext context) {
     final messenger = ScaffoldMessenger.of(context)..clearSnackBars();
     messenger.showSnackBar(
@@ -429,7 +450,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _handleLogin(BuildContext context) async {
     ScaffoldMessenger.of(context).clearSnackBars();
-    await context.read<AuthProvider>().exitGuestMode();
+    // Was the guest-mode "sign in to upgrade" affordance. Guest mode is
+    // gone; if any stale call site reaches this we just sign the user
+    // out and bounce to /login.
+    await context.read<AuthProvider>().signOut();
     if (!context.mounted) return;
     Navigator.pushNamedAndRemoveUntil(
       context,
@@ -1339,10 +1363,7 @@ class _AccountTile extends StatelessWidget {
   final String title;
   final String? subtitle;
   final String? trailingText;
-  final Color? trailingColor;
   final String? trailingBadge;
-  final bool showProgress;
-  final double progress;
   final bool locked;
   final VoidCallback onTap;
 
@@ -1351,10 +1372,7 @@ class _AccountTile extends StatelessWidget {
     required this.title,
     this.subtitle,
     this.trailingText,
-    this.trailingColor,
     this.trailingBadge,
-    this.showProgress = false,
-    this.progress = 0,
     this.locked = false,
     required this.onTap,
   });
@@ -1440,25 +1458,6 @@ class _AccountTile extends StatelessWidget {
                       ),
                     ),
                   ],
-                  if (showProgress && !locked) ...[
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(50),
-                      child: TweenAnimationBuilder<double>(
-                        tween: Tween(begin: 0, end: progress.clamp(0, 1)),
-                        duration: const Duration(milliseconds: 700),
-                        curve: Curves.easeOutCubic,
-                        builder: (_, value, __) => LinearProgressIndicator(
-                          value: value,
-                          minHeight: 4,
-                          backgroundColor:
-                              context.divider.withValues(alpha: 0.6),
-                          valueColor: AlwaysStoppedAnimation(
-                              trailingColor ?? AppColors.primary),
-                        ),
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -1472,7 +1471,7 @@ class _AccountTile extends StatelessWidget {
                   textAlign: TextAlign.end,
                   style: TextStyle(
                     fontSize: 13,
-                    color: trailingColor ?? context.textSecondary,
+                    color: context.textSecondary,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1681,135 +1680,6 @@ class _ThemeOption extends StatelessWidget {
   }
 }
 
-/// Compact two-icon toggle that swaps the active app role.
-///
-/// Sits in the header row beside the share button — left half = Seeker,
-/// right half = Hirer. The selected indicator slides between halves with
-/// the same duration and curve in both directions so the swap feels
-/// symmetric. Tapping the already-active side is a no-op; the other side
-/// delegates to the parent's switch handler (which routes first-time
-/// hirers through company setup).
-class _RoleToggle extends StatelessWidget {
-  final bool isHirer;
-  final VoidCallback onSwitch;
-  const _RoleToggle({
-    required this.isHirer,
-    required this.onSwitch,
-  });
-
-  static const double _width = 76;
-  static const double _height = 38;
-  static const double _knob = 32;
-  static const double _pad = 3;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: _width,
-      height: _height,
-      decoration: BoxDecoration(
-        color: context.surface,
-        borderRadius: BorderRadius.circular(_height / 2),
-        border: Border.all(color: context.cardBorder, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(_pad),
-      child: Stack(
-        children: [
-          AnimatedAlign(
-            alignment:
-                isHirer ? Alignment.centerRight : Alignment.centerLeft,
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
-            child: Container(
-              width: _knob,
-              height: _knob,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppColors.primary, AppColors.primaryDark],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(_knob / 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.28),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: _RoleHalf(
-                  icon: Icons.person_search_rounded,
-                  active: !isHirer,
-                  tooltip: 'Seeker mode',
-                  onTap: isHirer ? onSwitch : null,
-                ),
-              ),
-              Expanded(
-                child: _RoleHalf(
-                  icon: Icons.business_center_rounded,
-                  active: isHirer,
-                  tooltip: 'Hirer mode',
-                  onTap: isHirer ? null : onSwitch,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RoleHalf extends StatelessWidget {
-  final IconData icon;
-  final bool active;
-  final String tooltip;
-  final VoidCallback? onTap;
-  const _RoleHalf({
-    required this.icon,
-    required this.active,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Center(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeOutCubic,
-            child: Icon(
-              icon,
-              key: ValueKey(active),
-              size: 17,
-              color: active ? Colors.white : context.textSecondary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Tap target that scales down on press and back up on release. Symmetric
 /// (down ~120ms ease-out, up ~180ms ease-out-back) so press and release feel
 /// connected rather than the snap-and-bounce that breaks the symmetry rule.
@@ -1849,3 +1719,27 @@ class _PressScaleState extends State<_PressScale> {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+//  SeekerEssentialsSection — inline editor for the flat profile fields that
+//  drive matching + auto-apply. Replaces the old "My Resume Profile" wizard
+//  + the Naukri-style sub-section editors. Resume upload calls the existing
+//  /users/resume + /users/resume/parse endpoints and seeds these fields
+//  directly via UserService.updateProfile.
+// ---------------------------------------------------------------------------
+
+/// Counts how many of the six matching-critical fields are present and
+/// returns a percentage. Matches the weight of each input on the matcher:
+/// resume + skills + experience + headline + roles + locations.
+int _seekerCompletion(UserModel u) {
+  int filled = 0;
+  const total = 6;
+  if ((u.resumeText ?? '').trim().isNotEmpty) filled++;
+  if (u.skills.isNotEmpty) filled++;
+  if (u.experienceYears > 0) filled++;
+  if (u.headline.trim().isNotEmpty) filled++;
+  if (u.preferredRoles.isNotEmpty) filled++;
+  if (u.preferredLocations.isNotEmpty) filled++;
+  return (filled * 100 / total).round();
+}
+

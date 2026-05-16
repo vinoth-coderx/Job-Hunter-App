@@ -10,14 +10,14 @@ import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
 import 'data/models/job_model.dart';
 import 'data/services/api_client.dart';
+import 'data/services/deep_link_service.dart';
 import 'data/services/push_service.dart';
 import 'data/services/storage_service.dart';
 import 'presentation/alerts/alerts_screen.dart';
 import 'presentation/auth/email_auth_screen.dart';
 import 'presentation/auth/forgot_password_screen.dart';
 import 'presentation/auth/login_screen.dart';
-import 'presentation/auth/onboarding_screen.dart';
-import 'presentation/auth/role_picker_screen.dart';
+import 'presentation/auth/recruiter_login_screen.dart';
 import 'presentation/auth/splash_screen.dart';
 import 'presentation/auto_apply/auto_apply_log_screen.dart';
 import 'presentation/ai/badges_screen.dart';
@@ -26,6 +26,9 @@ import 'presentation/widgets/coin_burst_overlay.dart';
 import 'presentation/ai/hirer_analytics_screen.dart';
 import 'presentation/ai/profile_optimizer_screen.dart';
 import 'presentation/ai/skill_gap_screen.dart';
+import 'presentation/ai/ats_score_screen.dart';
+import 'presentation/ai/ai_assistant_screen.dart';
+import 'presentation/ai/ai_usage_history_screen.dart';
 import 'presentation/assessments/skill_assessments_screen.dart';
 import 'presentation/auto_apply/auto_apply_setup_screen.dart';
 import 'presentation/chat/chat_screen.dart';
@@ -40,6 +43,7 @@ import 'presentation/hirer/hirer_profile_setup_screen.dart';
 import 'presentation/hirer/manage_jobs_screen.dart';
 import 'presentation/hirer/post_job_screen.dart';
 import 'presentation/hirer/team_management_screen.dart';
+import 'presentation/job_detail/job_detail_by_id_screen.dart';
 import 'presentation/job_detail/job_detail_screen.dart';
 import 'presentation/main_navigation/role_aware_main_screen.dart';
 import 'presentation/notifications/notifications_screen.dart';
@@ -47,12 +51,12 @@ import 'presentation/profile/about_screen.dart';
 import 'presentation/profile/edit_field_screen.dart';
 import 'presentation/profile/help_support_screen.dart';
 import 'presentation/profile/notification_prefs_screen.dart';
-import 'presentation/profile/profile_information_screen.dart';
-import 'presentation/profile/resume_profile_screen.dart';
 import 'presentation/profile/subscription_screen.dart';
 import 'presentation/saved/saved_jobs_screen.dart';
 import 'presentation/search/search_screen.dart';
+import 'providers/ai_assistant_provider.dart';
 import 'providers/ai_quota_provider.dart';
+import 'providers/ats_provider.dart';
 import 'providers/alert_provider.dart';
 import 'providers/applicants_provider.dart';
 import 'providers/auth_provider.dart';
@@ -63,11 +67,27 @@ import 'providers/hirer_jobs_provider.dart';
 import 'providers/hirer_provider.dart';
 import 'providers/job_provider.dart';
 import 'providers/notification_provider.dart';
-import 'providers/resume_profile_provider.dart';
 import 'providers/theme_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Replace Flutter's default red "yellow text on red" error screen with
+  // a calm fallback the user can recover from. The original error still
+  // hits FlutterError.onError below, so devs see it in the console and
+  // crash reporters keep their stack traces; only the *visible* widget
+  // changes. Without this, an InheritedWidget assertion or a stray
+  // build-time exception paints a giant red banner over the whole app.
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return _FriendlyErrorFallback(details: details);
+  };
+
+  // Pipe framework errors to debugPrint so the Logcat / Xcode console
+  // still shows them — important for diagnosing the same bug we just
+  // hid from the user above.
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+  };
 
   // Lock to portrait orientation for the mobile-first design
   await SystemChrome.setPreferredOrientations([
@@ -119,6 +139,12 @@ Future<void> main() async {
   // on cold start — push permission prompts can wait one extra tick.
   unawaited(PushService.init());
 
+  // Android App Links / iOS Universal Links / jobhunter:// custom
+  // scheme. Captures the cold-start URI (terminated-state launch from a
+  // tapped email or push link) so the right screen opens after the
+  // navigator mounts; also subscribes to live link arrivals.
+  unawaited(DeepLinkService.init());
+
   runApp(const JobHunterApp());
 }
 
@@ -131,7 +157,6 @@ class JobHunterApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => JobProvider()),
-        ChangeNotifierProvider(create: (_) => ResumeProfileProvider()..load()),
         ChangeNotifierProvider(create: (_) => AlertProvider()),
         ChangeNotifierProvider(create: (_) => HirerProvider()),
         ChangeNotifierProvider(create: (_) => HirerJobsProvider()),
@@ -142,6 +167,8 @@ class JobHunterApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => AiQuotaProvider()..startBackgroundRefresh()),
+        ChangeNotifierProvider(create: (_) => AtsProvider()),
+        ChangeNotifierProvider(create: (_) => AiAssistantProvider()),
       ],
       child: const _UnauthorizedRedirectGate(child: _AppRoot()),
     );
@@ -232,25 +259,31 @@ class _AppRoot extends StatelessWidget {
               return MaterialPageRoute(
                 builder: (_) => const LoginScreen(),
               );
-            case AppRoutes.emailAuth:
-              final initialSignUp = settings.arguments == 'signup';
+            case AppRoutes.recruiterLogin:
               return MaterialPageRoute(
-                builder: (_) =>
-                    EmailAuthScreen(initialSignUp: initialSignUp),
+                builder: (_) => const RecruiterLoginScreen(),
+              );
+            case AppRoutes.emailAuth:
+              // The argument string carries two orthogonal bits:
+              //   - `signup` / `signin` → which mode the form opens in
+              //   - `-hirer` suffix     → the caller is the recruiter
+              //                            flow, which expects a `pop(true)`
+              //                            on success instead of pushing
+              //                            straight to /main.
+              final arg = settings.arguments as String? ?? '';
+              final initialSignUp = arg.startsWith('signup');
+              final forHirer = arg.endsWith('-hirer');
+              return MaterialPageRoute(
+                builder: (_) => EmailAuthScreen(
+                  initialSignUp: initialSignUp,
+                  forHirer: forHirer,
+                ),
               );
             case AppRoutes.forgotPassword:
               final initialEmail = settings.arguments as String?;
               return MaterialPageRoute(
                 builder: (_) =>
                     ForgotPasswordScreen(initialEmail: initialEmail),
-              );
-            case AppRoutes.rolePicker:
-              return MaterialPageRoute(
-                builder: (_) => const RolePickerScreen(),
-              );
-            case AppRoutes.onboarding:
-              return MaterialPageRoute(
-                builder: (_) => const OnboardingScreen(),
               );
             case AppRoutes.main:
               return MaterialPageRoute(
@@ -272,13 +305,10 @@ class _AppRoot extends StatelessWidget {
               return MaterialPageRoute(
                 builder: (_) => JobDetailScreen(job: job),
               );
-            case AppRoutes.profileInformation:
+            case AppRoutes.jobDetailById:
+              final jobId = (settings.arguments as String?) ?? '';
               return MaterialPageRoute(
-                builder: (_) => const ProfileInformationScreen(),
-              );
-            case AppRoutes.resumeProfile:
-              return MaterialPageRoute(
-                builder: (_) => const ResumeProfileScreen(),
+                builder: (_) => JobDetailByIdScreen(jobId: jobId),
               );
             case AppRoutes.editField:
               final args = settings.arguments as EditFieldArgs;
@@ -370,6 +400,23 @@ class _AppRoot extends StatelessWidget {
               return MaterialPageRoute(
                 builder: (_) => const SkillGapScreen(),
               );
+            case AppRoutes.atsScore:
+              final args =
+                  (settings.arguments as Map<String, String>?) ?? const {};
+              return MaterialPageRoute(
+                builder: (_) => AtsScoreScreen(
+                  jobId: args['jobId'],
+                  jobTitle: args['jobTitle'],
+                ),
+              );
+            case AppRoutes.aiAssistant:
+              return MaterialPageRoute(
+                builder: (_) => const AiAssistantScreen(),
+              );
+            case AppRoutes.aiUsageHistory:
+              return MaterialPageRoute(
+                builder: (_) => const AiUsageHistoryScreen(),
+              );
             case AppRoutes.skillAssessments:
               return MaterialPageRoute(
                 builder: (_) => const SkillAssessmentsScreen(),
@@ -414,3 +461,59 @@ class _AppRoot extends StatelessWidget {
   }
 }
 
+/// Drop-in replacement for Flutter's default red error widget. Shows a
+/// neutral surface with a "Something went wrong" message instead of the
+/// raw yellow-on-red stack trace. The underlying error still hits
+/// `FlutterError.onError` so devs see it in the console and any
+/// connected crash reporter records it — only the *visible* widget is
+/// replaced. Tappable hint to restart the app via a hot-reload prompt
+/// or to navigate back if a parent Navigator is reachable.
+class _FriendlyErrorFallback extends StatelessWidget {
+  final FlutterErrorDetails details;
+  const _FriendlyErrorFallback({required this.details});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFF7F8FA),
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Icon(
+                  Icons.sentiment_dissatisfied_outlined,
+                  size: 48,
+                  color: Color(0xFF8A94A6),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Something went wrong',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1F2937),
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'This screen ran into a problem. Go back and try again — '
+                  'if it keeps happening, please try restarting the app.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.45,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -5,6 +5,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/models/job_model.dart';
 import '../../data/services/push_service.dart';
+import '../ai/widgets/ai_tour_sheet.dart';
 import '../../providers/alert_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/coins_provider.dart';
@@ -66,6 +67,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // falls back to whatever value the provider last cached.
         context.read<CoinsProvider>().refresh();
         PushService.init();
+        // First-run AI features tour. Self-gated by `hasAiTourSeen`
+        // so we never re-show. Deliberately not awaited — the tour
+        // is supplementary, never blocks the home feed render.
+        AiTourSheet.showIfNeeded(context);
       }
     });
   }

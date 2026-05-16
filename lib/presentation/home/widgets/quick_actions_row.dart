@@ -39,6 +39,20 @@ class QuickActionsRow extends StatelessWidget {
         ai: true,
       ),
       _QuickAction(
+        icon: Icons.fact_check_outlined,
+        label: 'ATS Score',
+        color: const Color(0xFF6366F1),
+        route: AppRoutes.atsScore,
+        ai: true,
+      ),
+      _QuickAction(
+        icon: Icons.support_agent_rounded,
+        label: 'Assistant',
+        color: const Color(0xFFF97316),
+        route: AppRoutes.aiAssistant,
+        ai: true,
+      ),
+      _QuickAction(
         icon: Icons.bookmark_rounded,
         label: 'Saved',
         color: const Color(0xFF10B981),

@@ -263,16 +263,39 @@ class AiGeneratedJd {
 }
 
 class AiChatTurn {
+  /// Stable id from the backend so the chat UI can attach feedback
+  /// (thumbs up/down) without relying on list index. Empty string for
+  /// legacy rows persisted before id-tracking shipped — UI hides the
+  /// feedback row in that case.
+  final String id;
   final String role; // 'user' | 'model'
   final String content;
   final int ts;
 
-  const AiChatTurn({required this.role, required this.content, required this.ts});
+  /// AI-suggested next questions the seeker can tap to send. Only set
+  /// on `role: 'model'` turns; the chat UI surfaces them as chips under
+  /// the latest reply only — older turns intentionally drop them so
+  /// stale suggestions don't pile up in the scrollback.
+  final List<String> followUps;
+
+  const AiChatTurn({
+    required this.role,
+    required this.content,
+    required this.ts,
+    this.id = '',
+    this.followUps = const [],
+  });
 
   factory AiChatTurn.fromJson(Map<String, dynamic> j) => AiChatTurn(
+        id: (j['id'] ?? '').toString(),
         role: (j['role'] ?? 'user').toString(),
         content: (j['content'] ?? '').toString(),
         ts: (j['ts'] as num?)?.toInt() ?? 0,
+        followUps: (j['followUps'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
       );
 
   bool get isUser => role == 'user';
@@ -280,11 +303,21 @@ class AiChatTurn {
 
 class AiChatResponse {
   final String reply;
+  final List<String> followUps;
   final List<AiChatTurn> history;
-  const AiChatResponse({required this.reply, required this.history});
+  const AiChatResponse({
+    required this.reply,
+    required this.history,
+    this.followUps = const [],
+  });
 
   factory AiChatResponse.fromJson(Map<String, dynamic> j) => AiChatResponse(
         reply: (j['reply'] ?? '').toString(),
+        followUps: (j['followUps'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
         history: ((j['history'] as List?) ?? const [])
             .whereType<Map>()
             .map((e) => AiChatTurn.fromJson(e.cast<String, dynamic>()))

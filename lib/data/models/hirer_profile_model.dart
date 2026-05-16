@@ -62,21 +62,42 @@ class HirerVerification {
   final bool isVerified;
   final String? gstNumber;
   final DateTime? verifiedAt;
+  // Per-channel flags. Mirror the backend `verification.levels` block so
+  // the verification screen can show "GST verified" / "Domain email
+  // verified" pills without a second round-trip.
+  final bool gstLevel;
+  final bool domainEmailLevel;
+  final bool websiteLevel;
+  final bool linkedinLevel;
+  final bool identityLevel;
 
   const HirerVerification({
     required this.isVerified,
     this.gstNumber,
     this.verifiedAt,
+    this.gstLevel = false,
+    this.domainEmailLevel = false,
+    this.websiteLevel = false,
+    this.linkedinLevel = false,
+    this.identityLevel = false,
   });
 
-  factory HirerVerification.fromJson(Map<String, dynamic> json) =>
-      HirerVerification(
-        isVerified: json['isVerified'] as bool? ?? false,
-        gstNumber: json['gstNumber'] as String?,
-        verifiedAt: json['verifiedAt'] != null
-            ? DateTime.tryParse(json['verifiedAt'].toString())
-            : null,
-      );
+  factory HirerVerification.fromJson(Map<String, dynamic> json) {
+    final levels =
+        (json['levels'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+    return HirerVerification(
+      isVerified: json['isVerified'] as bool? ?? false,
+      gstNumber: json['gstNumber'] as String?,
+      verifiedAt: json['verifiedAt'] != null
+          ? DateTime.tryParse(json['verifiedAt'].toString())
+          : null,
+      gstLevel: levels['gst'] as bool? ?? false,
+      domainEmailLevel: levels['domainEmail'] as bool? ?? false,
+      websiteLevel: levels['website'] as bool? ?? false,
+      linkedinLevel: levels['linkedin'] as bool? ?? false,
+      identityLevel: levels['identity'] as bool? ?? false,
+    );
+  }
 }
 
 class HirerProfile {
@@ -98,6 +119,12 @@ class HirerProfile {
   final int totalReviews;
   final int followersCount;
   final int activeJobsCount;
+  // Anti-fraud state pushed down from the backend so the dashboard can
+  // render approval banners + posting-limit pills. `approvalStatus` is
+  // one of 'pending_review' | 'approved' | 'suspended' | 'banned'.
+  final String approvalStatus;
+  final int trustScore;
+  final int dailyPostLimit;
 
   const HirerProfile({
     required this.id,
@@ -118,6 +145,9 @@ class HirerProfile {
     this.totalReviews = 0,
     this.followersCount = 0,
     this.activeJobsCount = 0,
+    this.approvalStatus = 'approved',
+    this.trustScore = 50,
+    this.dailyPostLimit = 3,
   });
 
   factory HirerProfile.fromJson(Map<String, dynamic> json) {
@@ -157,6 +187,9 @@ class HirerProfile {
       totalReviews: (rating?['totalReviews'] as int?) ?? 0,
       followersCount: (json['followersCount'] as int?) ?? 0,
       activeJobsCount: (json['activeJobsCount'] as int?) ?? 0,
+      approvalStatus: json['approvalStatus'] as String? ?? 'approved',
+      trustScore: (json['trustScore'] as num?)?.toInt() ?? 50,
+      dailyPostLimit: (json['dailyPostLimit'] as num?)?.toInt() ?? 3,
     );
   }
 }

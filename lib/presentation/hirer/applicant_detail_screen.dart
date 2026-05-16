@@ -8,6 +8,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/applicant_model.dart';
+import '../../data/services/applicants_service.dart';
 import '../../providers/applicants_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../interviews/schedule_interview_sheet.dart';
@@ -138,14 +139,23 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen>
   Widget _content(Applicant a) {
     final s = a.seeker;
     final df = DateFormat('d MMM yyyy');
+    final privacy = a.seekerPrivacy;
+    final contactHidden = privacy != null && !privacy.contactRevealed;
     return Stack(
       children: [
         ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 200),
           children: [
             _header(a),
+            if (contactHidden) _PrivacyPill(allowDownload: privacy.allowResumeDownload),
             const SizedBox(height: 12),
             if (a.matchScore != null) _matchCard(a),
+            if (a.aiRanking != null) ...[
+              const SizedBox(height: 12),
+              _aiInsightCard(a.aiRanking!),
+            ],
+            const SizedBox(height: 12),
+            _ResumeTldrCard(applicationId: a.applicationId),
             const SizedBox(height: 12),
             if (a.quickNote != null && a.quickNote!.isNotEmpty)
               _section('Quick note from applicant', a.quickNote!),
@@ -333,6 +343,157 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen>
           ),
         ],
       ),
+    );
+  }
+
+  Widget _aiInsightCard(ApplicantAiRanking r) {
+    Color color;
+    if (r.score >= 75) {
+      color = AppColors.success;
+    } else if (r.score >= 60) {
+      color = AppColors.primary;
+    } else if (r.score >= 40) {
+      color = AppColors.warning;
+    } else {
+      color = AppColors.urgent;
+    }
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_awesome, color: color, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'AI verdict',
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: context.textSecondary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: color.withValues(alpha: 0.30)),
+                ),
+                child: Text(
+                  '#${r.rank} · ${r.score} · ${r.band}',
+                  style: AppTextStyles.labelSmall.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (r.summary.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              r.summary,
+              style: AppTextStyles.bodyMedium.copyWith(
+                color: context.textPrimary,
+                height: 1.4,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+          if (r.strengths.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _aiInsightBullets(
+              label: 'Strengths',
+              icon: Icons.thumb_up_alt_outlined,
+              color: AppColors.success,
+              items: r.strengths,
+            ),
+          ],
+          if (r.concerns.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _aiInsightBullets(
+              label: 'Concerns',
+              icon: Icons.warning_amber_outlined,
+              color: AppColors.warning,
+              items: r.concerns,
+            ),
+          ],
+          if (r.rankedAt != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Ranked ${DateFormat('d MMM, h:mm a').format(r.rankedAt!.toLocal())}',
+              style: AppTextStyles.labelSmall.copyWith(
+                color: context.textTertiary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _aiInsightBullets({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required List<String> items,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: AppTextStyles.labelSmall.copyWith(
+                color: color,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        for (final item in items)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 7, right: 8),
+                  child: Container(
+                    width: 5,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    item,
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: context.textPrimary,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 
@@ -542,6 +703,254 @@ class _ApplicantDetailScreenState extends State<ApplicantDetailScreen>
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+class _PrivacyPill extends StatelessWidget {
+  const _PrivacyPill({required this.allowDownload});
+  final bool allowDownload;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceVariant,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.lock_outline,
+              size: 18, color: AppColors.textSecondary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              allowDownload
+                  ? 'Contact hidden — shortlist this applicant to reveal email and phone.'
+                  : 'Contact hidden + resume downloads disabled by this applicant.',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Lazy-loaded "TL;DR this resume" card on the applicant detail screen.
+/// One-tap fetches the AI summary from `/hirer/applicants/:id/resume-tldr`
+/// — server-side cache by hash(resumeText) means hirers re-opening the
+/// same candidate (or seeing the same candidate across roles) get the
+/// summary for free of quota after the first fetch.
+class _ResumeTldrCard extends StatefulWidget {
+  final String applicationId;
+  const _ResumeTldrCard({required this.applicationId});
+
+  @override
+  State<_ResumeTldrCard> createState() => _ResumeTldrCardState();
+}
+
+class _ResumeTldrCardState extends State<_ResumeTldrCard> {
+  bool _loading = false;
+  bool _failed = false;
+  ({
+    String summary,
+    List<String> strengths,
+    int? yearsOfExperience,
+    List<String> topRoles,
+    bool usedAi,
+    bool cached,
+  })? _data;
+
+  Future<void> _load() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final res = await ApplicantsService.instance.resumeTldr(
+        applicationId: widget.applicationId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _data = res;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _failed = true;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = _data;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.20),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome,
+                  size: 16, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                'AI résumé summary',
+                style: AppTextStyles.labelSmall.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const Spacer(),
+              if (data == null && !_loading && !_failed)
+                TextButton.icon(
+                  onPressed: _load,
+                  icon: const Icon(Icons.bolt, size: 14),
+                  label: const Text('Summarise'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              if (_failed)
+                TextButton.icon(
+                  onPressed: _load,
+                  icon: const Icon(Icons.refresh, size: 14),
+                  label: const Text('Retry'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.urgent,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+            ],
+          ),
+          if (_loading) ...[
+            const SizedBox(height: 10),
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ] else if (_failed) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Could not generate the summary right now.',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: context.textSecondary,
+              ),
+            ),
+          ] else if (data != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              data.summary,
+              style: AppTextStyles.bodyMedium.copyWith(
+                color: context.textPrimary,
+                height: 1.4,
+              ),
+            ),
+            if (data.strengths.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              for (final s in data.strengths)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 7, right: 8),
+                        child: Container(
+                          width: 5,
+                          height: 5,
+                          decoration: const BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          s,
+                          style: AppTextStyles.bodySmall.copyWith(
+                            color: context.textPrimary,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            if (data.topRoles.isNotEmpty || data.yearsOfExperience != null) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (data.yearsOfExperience != null)
+                    _MetaChip(label: '${data.yearsOfExperience}y exp'),
+                  for (final r in data.topRoles) _MetaChip(label: r),
+                ],
+              ),
+            ],
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              'Tap "Summarise" to read the resume in 5 seconds.',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: context.textSecondary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MetaChip extends StatelessWidget {
+  final String label;
+  const _MetaChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: AppTextStyles.labelSmall.copyWith(
+          color: AppColors.primary,
+          fontWeight: FontWeight.w700,
+          fontSize: 11,
+        ),
       ),
     );
   }

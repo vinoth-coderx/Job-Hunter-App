@@ -18,6 +18,12 @@ class CompanyProfile {
   final int activeJobsCount;
   final bool isVerified;
   final bool isFollowing;
+  // Anti-fraud signals surfaced for the seeker — `trustScore` drives the
+  // SafeApplyBadge / FraudWarningBanner thresholds; `approvalStatus`
+  // lets the UI surface a "suspended" warning if the admin has flagged
+  // the recruiter.
+  final int trustScore;
+  final String approvalStatus;
 
   const CompanyProfile({
     required this.id,
@@ -36,6 +42,8 @@ class CompanyProfile {
     this.activeJobsCount = 0,
     this.isVerified = false,
     this.isFollowing = false,
+    this.trustScore = 50,
+    this.approvalStatus = 'approved',
   });
 
   factory CompanyProfile.fromJson(Map<String, dynamic> j) {
@@ -60,6 +68,8 @@ class CompanyProfile {
       activeJobsCount: (j['activeJobsCount'] as num?)?.toInt() ?? 0,
       isVerified: verification?['isVerified'] as bool? ?? false,
       isFollowing: j['isFollowing'] as bool? ?? false,
+      trustScore: (j['trustScore'] as num?)?.toInt() ?? 50,
+      approvalStatus: j['approvalStatus'] as String? ?? 'approved',
     );
   }
 }

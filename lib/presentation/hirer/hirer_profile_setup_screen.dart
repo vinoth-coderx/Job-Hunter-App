@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../data/models/hirer_profile_model.dart';
+import '../../data/services/hirer_service.dart';
 import '../../providers/hirer_provider.dart';
 import '../widgets/app_avatar.dart';
 import '../widgets/app_text.dart';
@@ -38,6 +39,7 @@ class _HirerProfileSetupScreenState extends State<HirerProfileSetupScreen> {
   int? _foundedYear;
   File? _pendingLogo;
   bool _prefilled = false;
+  bool _generatingDescription = false;
 
   static const _sizes = [
     '1-10',
@@ -85,6 +87,54 @@ class _HirerProfileSetupScreenState extends State<HirerProfileSetupScreen> {
     _twitter.dispose();
     _foundedYearCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _generateDescription() async {
+    if (_generatingDescription) return;
+    if (_name.text.trim().length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Add the company name first'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+    setState(() => _generatingDescription = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final result = await HirerService.instance.generateCompanyDescription(
+        companyName: _name.text.trim(),
+        industry: _industry.text.trim(),
+        sizeBand: _companySize,
+        hqLocation: [_hqCity.text.trim(), _hqState.text.trim()]
+            .where((s) => s.isNotEmpty)
+            .join(', '),
+        whatYouDo: _description.text.trim(),
+        toneHint: 'professional',
+      );
+      if (!mounted) return;
+      if (result.description.isEmpty) {
+        messenger.showSnackBar(const SnackBar(
+          content: Text('AI is unavailable right now — try again in a bit'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      } else {
+        setState(() => _description.text = result.description);
+        messenger.showSnackBar(SnackBar(
+          content: Text(result.cached
+              ? 'Drafted from cache — edit before saving'
+              : 'AI draft ready — edit before saving'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text('Could not generate: $e'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } finally {
+      if (mounted) setState(() => _generatingDescription = false);
+    }
   }
 
   Future<void> _pickLogo() async {
@@ -229,7 +279,33 @@ class _HirerProfileSetupScreenState extends State<HirerProfileSetupScreen> {
                         validator: _optionalUrl,
                       ),
                       const SizedBox(height: 20),
-                      _sectionLabel('About the company'),
+                      Row(
+                        children: [
+                          Expanded(child: _sectionLabel('About the company')),
+                          TextButton.icon(
+                            onPressed: _generatingDescription
+                                ? null
+                                : _generateDescription,
+                            icon: _generatingDescription
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.auto_awesome, size: 16),
+                            label: Text(
+                              _description.text.trim().isEmpty
+                                  ? 'Draft with AI'
+                                  : 'Re-draft with AI',
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      ),
                       _textField(
                         controller: _description,
                         label: 'Short description',

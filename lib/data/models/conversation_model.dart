@@ -54,6 +54,10 @@ class Conversation {
   final String? companyName;
   final String? companyLogo;
   final String? jobTitle;
+  /// True when the company linked to this conversation is verified.
+  /// Surfaces a green check next to the company name in the chat header
+  /// so the seeker can tell a Verified recruiter from a fresh signup.
+  final bool companyVerified;
 
   /// Side of the thread the current user sits on — `'seeker'` when this
   /// is an outbound application chat, `'hirer'` when the user is the
@@ -73,6 +77,7 @@ class Conversation {
     this.companyName,
     this.companyLogo,
     this.jobTitle,
+    this.companyVerified = false,
     this.viewerRole = 'seeker',
   });
 
@@ -102,6 +107,7 @@ class Conversation {
       companyName: rawCompanyName?.trim().isEmpty == true ? null : rawCompanyName,
       companyLogo: rawCompanyLogo?.trim().isEmpty == true ? null : rawCompanyLogo,
       jobTitle: rawJobTitle?.trim().isEmpty == true ? null : rawJobTitle,
+      companyVerified: j['companyVerified'] as bool? ?? false,
       viewerRole: rawViewerRole == 'hirer' ? 'hirer' : 'seeker',
     );
   }

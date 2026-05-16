@@ -7,9 +7,12 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/models/conversation_model.dart';
+import '../../data/services/chat_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../widgets/app_avatar.dart';
+import '../widgets/trust_badges.dart';
+import '../widgets/report_sheet.dart';
 import 'chat_attachment_viewer.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -347,6 +350,29 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.transparent,
+        actions: isSelf || other == null
+            ? null
+            : [
+                IconButton(
+                  icon: const Icon(Icons.flag_outlined),
+                  tooltip: 'Report',
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final ok = await showReportSheet(
+                      context: context,
+                      subjectType: 'message',
+                      subjectId: other.id,
+                    );
+                    if (ok && mounted) {
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('Report submitted.'),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
         title: Row(
           children: [
             isSelf
@@ -375,12 +401,23 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    headerTitle,
-                    style: AppTextStyles.bodyMedium
-                        .copyWith(fontWeight: FontWeight.w700),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          headerTitle,
+                          style: AppTextStyles.bodyMedium
+                              .copyWith(fontWeight: FontWeight.w700),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (hasCompanyBranding && (conv?.companyVerified ?? false)) ...[
+                        const SizedBox(width: 6),
+                        const VerifiedBadge(),
+                      ],
+                    ],
                   ),
                   if (isOtherTyping)
                     Text('typing…',
@@ -476,6 +513,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 );
               },
             ),
+          // AI smart-reply chips for the hirer side. Only renders when:
+          //   - the viewer is the hirer (isHirerSide)
+          //   - there's at least one message AND the latest is from the
+          //     candidate (otherwise replying-to-myself is meaningless)
+          // Backend caches per (last 6 turns, 1h) so paging through long
+          // threads stays free of quota.
+          if (!_loading && messages.isNotEmpty && _isHirerSide())
+            _SmartReplyChips(
+              conversationId: widget.conversationId,
+              latestMessageId: messages.last.id,
+              showWhenSenderIsCandidate: messages.last.senderId !=
+                  context.read<AuthProvider>().user?.id,
+              onPick: (text) {
+                _input.text = text;
+                _input.selection = TextSelection.fromPosition(
+                  TextPosition(offset: text.length),
+                );
+              },
+            ),
           _Composer(
             controller: _input,
             onChanged: _onInputChanged,
@@ -490,6 +546,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// True when this conversation is being viewed from the hirer side —
+  /// drives the AI smart-reply chip row above the composer. We use the
+  /// conversation's resolved viewerRole when available, falling back to
+  /// "is the current user the hirer-mode user" so the chips stay
+  /// scoped to recruiter responses.
+  bool _isHirerSide() {
+    final auth = context.read<AuthProvider>();
+    if (auth.isHirerMode) return true;
+    final conv = _conv();
+    if (conv == null) return false;
+    return conv.viewerRole == 'hirer';
+  }
 
   Widget _emptyThread() => Center(
         child: Padding(
@@ -1083,6 +1152,131 @@ class _StarterSuggestions extends StatelessWidget {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// AI smart-reply chip row above the composer (hirer side only).
+/// Re-fetches whenever the latest message id changes — typically after
+/// the candidate sends something new. Returns nothing (collapses) when
+/// the suggestions list is empty so the composer stays anchored to
+/// the bottom edge during loading + empty states.
+class _SmartReplyChips extends StatefulWidget {
+  final String conversationId;
+  final String latestMessageId;
+  final bool showWhenSenderIsCandidate;
+  final void Function(String text) onPick;
+  const _SmartReplyChips({
+    required this.conversationId,
+    required this.latestMessageId,
+    required this.showWhenSenderIsCandidate,
+    required this.onPick,
+  });
+
+  @override
+  State<_SmartReplyChips> createState() => _SmartReplyChipsState();
+}
+
+class _SmartReplyChipsState extends State<_SmartReplyChips> {
+  List<String> _suggestions = const [];
+  String? _loadedForMessageId;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.showWhenSenderIsCandidate) _maybeLoad();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SmartReplyChips old) {
+    super.didUpdateWidget(old);
+    if (widget.showWhenSenderIsCandidate &&
+        widget.latestMessageId != _loadedForMessageId) {
+      _maybeLoad();
+    } else if (!widget.showWhenSenderIsCandidate && _suggestions.isNotEmpty) {
+      // Hirer just sent something — clear stale suggestions until the
+      // candidate replies with a new last message.
+      setState(() {
+        _suggestions = const [];
+        _loadedForMessageId = null;
+      });
+    }
+  }
+
+  Future<void> _maybeLoad() async {
+    if (_loading) return;
+    _loading = true;
+    final id = widget.latestMessageId;
+    try {
+      final res = await ChatService.instance.smartReplies(widget.conversationId);
+      if (!mounted) return;
+      setState(() {
+        _suggestions = res;
+        _loadedForMessageId = id;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _suggestions = const [];
+        _loadedForMessageId = id;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.showWhenSenderIsCandidate || _suggestions.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(Icons.auto_awesome,
+                  size: 14, color: AppColors.primary),
+            ),
+            for (final s in _suggestions)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(50),
+                  onTap: () => widget.onPick(s),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(50),
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 240),
+                      child: Text(
+                        s,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.labelSmall.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );

@@ -9,6 +9,8 @@ import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/app_snackbar.dart';
+import '../widgets/report_sheet.dart';
+import '../widgets/trust_badges.dart';
 import '../../data/models/job_model.dart';
 import '../../data/services/api_client.dart';
 import '../../data/services/chat_service.dart';
@@ -192,7 +194,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   void _showSuccessDialog() {
     showGeneralDialog(
       context: context,
-      barrierDismissible: false,
+      // Allow dismiss via tap-outside or system back so the user is never
+      // trapped under the celebration overlay if they return from the
+      // external apply page mid-animation. The dialog has its own
+      // close affordance too (Done button) — both routes leave the seeker
+      // on the job detail screen they came from.
+      barrierDismissible: true,
       barrierLabel: 'Application tracked',
       // Dialog paints its own animated radial-gradient backdrop, so the
       // route barrier is fully transparent — otherwise the gradient
@@ -201,10 +208,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (_, __, ___) => _ApplySuccessDialog(
         company: _job.company,
-        onDone: () {
-          Navigator.pop(context); // dismiss the dialog
-          Navigator.pop(context); // exit job detail
-        },
+        // Single pop = dismiss the celebration only. Previously this also
+        // popped the job detail screen and dropped the seeker on Home,
+        // which felt like the app navigated away by itself — especially
+        // after the in-app apply browser closed and the seeker was just
+        // trying to close the confetti overlay.
+        onDone: () => Navigator.pop(context),
       ),
       // Plain fade — the dialog drives its own confetti + icon animation,
       // a competing scale/slide here just muddies the burst.
@@ -311,6 +320,36 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       ),
                       const Spacer(),
                       _CircleButton(
+                        icon: Icons.flag_outlined,
+                        onTap: () async {
+                          if (!_job.isNative) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'External listings are reported back to their source.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          final messenger = ScaffoldMessenger.of(context);
+                          final ok = await showReportSheet(
+                            context: context,
+                            subjectType: 'job',
+                            subjectId: _job.id,
+                          );
+                          if (ok && mounted) {
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                    'Report submitted. Thanks for keeping the platform safe.'),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      _CircleButton(
                         icon: Icons.ios_share_rounded,
                         onTap: _shareJob,
                       ),
@@ -371,6 +410,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _Header(job: _job),
+                              if (_job.isNative &&
+                                  !_job.companyVerified &&
+                                  (_job.recruiterTrustScore ?? 50) < 40) ...[
+                                const SizedBox(height: 14),
+                                const FraudWarningBanner(),
+                              ],
                               if (_hasStatHero) ...[
                                 const SizedBox(height: 14),
                                 _StatHero(job: _job),
@@ -379,6 +424,8 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                                 const SizedBox(height: 16),
                                 _InfoChips(job: _job),
                               ],
+                              const SizedBox(height: 16),
+                              _AtsTailorCard(job: _job),
                               if (_job.skills.isNotEmpty) ...[
                                 const SizedBox(height: 28),
                                 _SectionTitle(
@@ -1241,15 +1288,34 @@ class _Header extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (job.company.isNotEmpty)
-                    Text(
-                      job.company,
-                      style: AppTextStyles.bodyMedium.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: context.textSecondary,
-                        letterSpacing: 0.1,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            job.company,
+                            style: AppTextStyles.bodyMedium.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: context.textSecondary,
+                              letterSpacing: 0.1,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (job.companyVerified) ...[
+                          const SizedBox(width: 6),
+                          const VerifiedBadge(),
+                        ],
+                      ],
+                    ),
+                  if (job.isNative)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: SafeApplyBadge.fromFlags(
+                        companyVerified: job.companyVerified,
+                        recruiterApproved: job.recruiterApproved,
+                        trustScore: job.recruiterTrustScore ?? 50,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                 ],
               ),
@@ -1405,6 +1471,86 @@ class _MatchBadge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Tailor your resume to this job" prompt card. One tap opens the ATS
+/// scorer scoped to this job (jobId + jobTitle passed through args), so
+/// the seeker sees a tailored score and missing-keyword list before they
+/// hit Apply. The card never carries any number itself — the score lives
+/// on the dedicated screen so the user gets the full breakdown.
+class _AtsTailorCard extends StatelessWidget {
+  final Job job;
+  const _AtsTailorCard({required this.job});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.of(context).pushNamed(
+          AppRoutes.atsScore,
+          arguments: {
+            'jobId': job.id,
+            'jobTitle': job.title,
+          },
+        ),
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.18),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(Icons.auto_awesome_rounded,
+                    size: 18, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Score your resume for this job',
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: context.textPrimary,
+                        height: 1.25,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'AI checks ATS fit + lists the keywords you\'re missing.',
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: context.textSecondary,
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.arrow_forward_rounded,
+                  size: 18, color: AppColors.primary),
+            ],
+          ),
+        ),
       ),
     );
   }

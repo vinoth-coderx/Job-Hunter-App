@@ -17,7 +17,6 @@ class AppConstants {
   static const String keyResumeProfile = 'resume_profile_v2';
   static const String keyAccessToken = 'access_token';
   static const String keyRefreshToken = 'refresh_token';
-  static const String keyIsGuest = 'is_guest_mode';
   static const String keyRecentSearches = 'recent_searches_v1';
   static const String keySavedSearches = 'saved_searches_v1';
   static const String keyThemeMode = 'theme_mode_v1';
@@ -27,6 +26,18 @@ class AppConstants {
   // re-prompting "Make it yours" every time the user toggles back to
   // seeker after a stint in hirer mode.
   static const String keySeekerOnboardingSeen = 'seeker_onboarding_seen_v1';
+
+  /// Marks whether the user has seen the AI features tour. Bumped to
+  /// _v2 (etc.) when we add a new screen worth re-introducing.
+  static const String keyAiTourSeen = 'ai_tour_seen_v1';
+
+  /// Latches to true once the resume AI parser has been applied locally
+  /// (whether the user accepted the auto-fill or not). Gates the
+  /// auto-parse retry inside [ResumeProfileProvider.syncFromBackend] so
+  /// items the user explicitly deleted don't reappear on screen
+  /// re-entry. Reset by [ResumeProfileProvider.importResume] when a new
+  /// resume file is uploaded — the new file gets a fresh parse pass.
+  static const String keyResumeParserApplied = 'resume_parser_applied_v1';
 
   static const String _devApiBaseUrl = 'http://localhost:4000/api/v1';
   static const String _prodApiBaseUrl =

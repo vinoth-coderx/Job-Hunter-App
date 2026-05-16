@@ -11,7 +11,6 @@ import '../../data/models/profile_optimizer_model.dart';
 import '../../data/services/ai_service.dart';
 import '../../providers/ai_quota_provider.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/resume_profile_provider.dart';
 import '../widgets/app_text.dart';
 
 class ProfileOptimizerScreen extends StatefulWidget {
@@ -89,8 +88,9 @@ class _ProfileOptimizerScreenState extends State<ProfileOptimizerScreen> {
             user.experienceYears > 0)) {
       return true;
     }
-    final resume = context.read<ResumeProfileProvider>().profile;
-    return resume.resumeFileName.trim().isNotEmpty;
+    // No structured signal yet — fall back to checking whether a resume
+    // text blob exists on the flat profile.
+    return (user?.resumeText ?? '').trim().isNotEmpty;
   }
 
   // ── Field plumbing ─────────────────────────────────────────────────
@@ -415,12 +415,9 @@ class _ProfileOptimizerScreenState extends State<ProfileOptimizerScreen> {
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () async {
-                  await Navigator.pushNamed(
-                      context, AppRoutes.resumeProfile);
-                  if (!mounted) return;
-                  setState(() {});
-                  _refresh(force: false);
+                onPressed: () {
+                  Navigator.pushNamedAndRemoveUntil(
+                      context, AppRoutes.main, (_) => false);
                 },
                 icon: const Icon(Icons.upload_file_rounded),
                 label: const Text('Upload resume'),
@@ -435,12 +432,9 @@ class _ProfileOptimizerScreenState extends State<ProfileOptimizerScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: FilledButton.icon(
-                onPressed: () async {
-                  await Navigator.pushNamed(
-                      context, AppRoutes.profileInformation);
-                  if (!mounted) return;
-                  setState(() {});
-                  _refresh(force: false);
+                onPressed: () {
+                  Navigator.pushNamedAndRemoveUntil(
+                      context, AppRoutes.main, (_) => false);
                 },
                 icon: const Icon(Icons.edit_rounded),
                 label: const Text('Fill profile'),
@@ -664,7 +658,8 @@ class _ProfileOptimizerScreenState extends State<ProfileOptimizerScreen> {
         icon: Icons.upload_file_rounded,
         label: 'Upload resume',
         color: AppColors.primary,
-        onTap: () => Navigator.pushNamed(context, AppRoutes.resumeProfile),
+        onTap: () => Navigator.pushNamedAndRemoveUntil(
+            context, AppRoutes.main, (_) => false),
       );
     }
 
@@ -686,7 +681,8 @@ class _ProfileOptimizerScreenState extends State<ProfileOptimizerScreen> {
     return _outlinedButton(
       icon: Icons.edit_outlined,
       label: 'Open profile',
-      onTap: () => Navigator.pushNamed(context, AppRoutes.resumeProfile),
+      onTap: () => Navigator.pushNamedAndRemoveUntil(
+          context, AppRoutes.main, (_) => false),
     );
   }
 

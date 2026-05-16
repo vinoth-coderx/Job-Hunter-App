@@ -98,6 +98,39 @@ class HirerAnalytics {
       );
 }
 
+/// AI-generated weekly digest for the hirer dashboard. One short
+/// headline + 2-4 next-action bullets. The backend caches per
+/// (hirerProfile, UTC day) so multiple dashboard refreshes never burn
+/// fresh quota — `cached` tells the UI whether this hit cache.
+class HirerDigest {
+  final String headline;
+  final List<String> bullets;
+  final DateTime generatedAt;
+  final bool cached;
+  final bool usedAi;
+
+  const HirerDigest({
+    required this.headline,
+    required this.bullets,
+    required this.generatedAt,
+    required this.cached,
+    required this.usedAi,
+  });
+
+  factory HirerDigest.fromJson(Map<String, dynamic> j) => HirerDigest(
+        headline: (j['headline'] ?? '').toString(),
+        bullets: (j['bullets'] as List?)
+                ?.map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList() ??
+            const [],
+        generatedAt: DateTime.tryParse((j['generatedAt'] ?? '').toString()) ??
+            DateTime.now(),
+        cached: j['cached'] as bool? ?? false,
+        usedAi: j['usedAi'] as bool? ?? false,
+      );
+}
+
 class HirerAnalyticsService {
   HirerAnalyticsService._();
   static final HirerAnalyticsService instance = HirerAnalyticsService._();
@@ -106,5 +139,13 @@ class HirerAnalyticsService {
   Future<HirerAnalytics> fetch() async {
     final raw = await _api.get('hirer/analytics');
     return HirerAnalytics.fromJson(ApiClient.unwrapMap(raw));
+  }
+
+  /// AI-generated weekly digest. Cheap on cache hits (24h server-side
+  /// per hirer + UTC day). Returns an empty-headline digest when the
+  /// hirer has no active jobs yet.
+  Future<HirerDigest> fetchDigest() async {
+    final raw = await _api.get('hirer/digest');
+    return HirerDigest.fromJson(ApiClient.unwrapMap(raw));
   }
 }

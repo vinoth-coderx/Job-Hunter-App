@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_sign_in/google_sign_in.dart';
 
@@ -93,6 +94,12 @@ class AuthService {
     try {
       await _googleSignIn?.signOut();
     } catch (_) {/* ignore */}
+    // Drop the cached GoogleSignIn instance. Reusing the same instance
+    // across a logout → re-login cycle is the known cause of "first
+    // signIn() returns null" on Android — the plugin's internal client
+    // gets stuck in a half-signed-out state. Building a fresh instance
+    // the next time [_google] runs avoids it.
+    _googleSignIn = null;
     try {
       await FirebaseAuth.instance.signOut();
     } catch (_) {/* Firebase not configured / already signed out — ignore. */}
@@ -134,19 +141,38 @@ class AuthService {
     if (!AppConstants.googleAuthConfigured) {
       throw 'Google sign-in is not configured. Add GOOGLE_WEB_CLIENT_ID to env/<env>.json and re-run.';
     }
-    final google = _google();
-    GoogleSignInAccount? account;
+
+    // Why we DON'T pre-emptively call `googleSignIn.signOut()` or
+    // `disconnect()` here: on Android, the google_sign_in plugin has a
+    // well-documented bug where the first `signIn()` call right after
+    // a `signOut()`/`disconnect()` returns null — the picker either
+    // doesn't show or returns before the user picked. The user-facing
+    // symptom is "Google login needs two taps". Our `logout()` already
+    // calls `googleSignIn.signOut()` when the user actually logs out,
+    // so the picker arrives clean by the time they tap Sign In again.
+    //
+    // We *do* clear FirebaseAuth's stale `currentUser` first, since a
+    // 401 redirect can drop our local tokens without touching Firebase,
+    // and `signInWithCredential` will throw "credential already in use"
+    // if the previous Firebase session is still hanging around.
     try {
-      account = await google.signIn();
-    } on PlatformException catch (e) {
-      throw _googlePlatformMessage(e);
-    } catch (e) {
-      throw 'Google sign-in failed: $e';
+      if (FirebaseAuth.instance.currentUser != null) {
+        await FirebaseAuth.instance.signOut();
+      }
+    } catch (_) {/* Firebase not configured / already out — fine */}
+
+    final account = await _resolveGoogleAccount();
+
+    // Fetch the OAuth tokens. The google_sign_in package occasionally
+    // returns a non-null account whose `authentication` resolves with a
+    // null idToken on the very first call against a fresh GoogleSignIn
+    // instance (no picker re-show happens — the second call uses the
+    // already-signed-in account). A single retry papers over that race
+    // without making the user tap again.
+    GoogleSignInAuthentication googleAuth = await account.authentication;
+    if (googleAuth.idToken == null || googleAuth.idToken!.isEmpty) {
+      googleAuth = await account.authentication;
     }
-    if (account == null) {
-      throw 'Sign-in cancelled';
-    }
-    final googleAuth = await account.authentication;
     final googleIdToken = googleAuth.idToken;
     final googleAccessToken = googleAuth.accessToken;
     if (googleIdToken == null || googleIdToken.isEmpty) {
@@ -180,47 +206,99 @@ class AuthService {
     }
   }
 
-  String _googlePlatformMessage(PlatformException e) {
-    final msg = e.message ?? '';
-    if (e.code == 'sign_in_failed' && msg.contains('10')) {
-      return 'Google sign-in misconfigured (DEVELOPER_ERROR 10). '
-          "Register this app's package name + debug SHA-1 as an "
-          'Android OAuth client in the same Google Cloud project as '
-          'GOOGLE_WEB_CLIENT_ID.';
+  /// Pop the OS Google account picker and return the selected account.
+  /// No pre-emptive signOut/disconnect — those trigger the Android
+  /// "first signIn returns null" plugin bug. The picker handles account
+  /// selection on its own; we only retry on null (which on Android is
+  /// the only reliable signal of "the plugin swallowed the tap" vs an
+  /// actual user cancellation — they're indistinguishable here, but the
+  /// cost of a second picker is small compared to forcing a second tap).
+  Future<GoogleSignInAccount> _resolveGoogleAccount() async {
+    GoogleSignInAccount? account;
+    try {
+      account = await _google().signIn();
+    } on PlatformException catch (e) {
+      throw _googlePlatformMessage(e);
+    } catch (e) {
+      throw 'Google sign-in failed: $e';
     }
-    if (e.code == 'network_error' || msg.contains('ApiException: 7')) {
-      return 'Google sign-in is blocked by Play Services config. '
-          'Add this app as an Android OAuth client (package: '
-          'com.vinoth.jobhunter, debug SHA-1 from `gradlew '
-          'signingReport`) in the same Google Cloud project as '
-          'GOOGLE_WEB_CLIENT_ID, then reinstall the app.';
+    if (account != null) return account;
+
+    // First call returned null without an exception. Most often this is
+    // a user cancellation, but on a freshly-rebuilt process it can also
+    // be the plugin's internal singleton returning early before the
+    // picker actually drew. Rebuild the GoogleSignIn instance — that
+    // clears the half-warmed cache — and try once more. If the user
+    // genuinely cancelled, they cancel the second picker too and we
+    // surface the cancellation cleanly.
+    _googleSignIn = null;
+    try {
+      account = await _google().signIn();
+    } on PlatformException catch (e) {
+      throw _googlePlatformMessage(e);
+    } catch (e) {
+      throw 'Google sign-in failed: $e';
     }
-    return 'Google sign-in failed: ${e.code} $msg'.trim();
+    if (account != null) return account;
+
+    throw 'Sign-in cancelled';
   }
 
-  /// Stateless guest session: backend issues a short-lived JWT carrying
-  /// `role: 'guest'`. The token is stored just like a real auth session,
-  /// so every API call automatically sends a Bearer header — no `auth:
-  /// false` special-casing needed downstream. Privileged endpoints (apply,
-  /// profile, subscription) still 403 the guest token, surfacing a clear
-  /// "sign in to continue" path in the UI.
-  Future<UserModel> loginAsGuest() async {
-    final body = await _api.post('auth/guest', auth: false);
-    final data = ApiClient.unwrapMap(body);
-    final access = data['accessToken'] as String?;
-    if (access == null || access.isEmpty) {
-      throw 'Server did not return a guest token';
+  /// User-facing error mapping for the `google_sign_in` PlatformException.
+  ///
+  /// Goal: never leak SDK error codes, stack traces, or setup instructions
+  /// into the UI — those belong in logs. The user gets one of three short,
+  /// recoverable messages:
+  ///   * "No internet…"            → device offline / Play Services can't
+  ///                                 reach Google (ApiException 7)
+  ///   * "Try again"               → transient/unknown SDK failure
+  ///   * "Sign-in cancelled"       → user dismissed the picker
+  ///
+  /// DEVELOPER_ERROR (code 10) is a build-time misconfig that the user can
+  /// do nothing about, so we still surface "Try again later" rather than
+  /// the SHA-1 instructions — those go to `debugPrint` for the developer.
+  String _googlePlatformMessage(PlatformException e) {
+    final msg = e.message ?? '';
+    if (kDebugMode) {
+      debugPrint('GoogleSignIn PlatformException: code=${e.code} msg=$msg');
     }
-    await StorageService.saveTokens(
-      accessToken: access,
-      // Guest tokens are not refreshable — store empty so api_client skips
-      // the auto-refresh on 401 and surfaces the error directly.
-      refreshToken: '',
-    );
-    final userJson = (data['user'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-    final user = UserModel.fromApiJson(userJson);
-    await StorageService.saveUser(user);
-    return user;
+
+    // Cancellation — surface as a softer message than "failed".
+    if (e.code == 'sign_in_canceled' ||
+        e.code == 'sign_in_cancelled' ||
+        msg.toLowerCase().contains('cancel')) {
+      return 'Sign-in cancelled';
+    }
+
+    // ApiException 7 = NETWORK_ERROR. Also catch the explicit network_error
+    // code emitted by some plugin versions.
+    if (e.code == 'network_error' || msg.contains('ApiException: 7')) {
+      return 'No internet. Check your connection and try again.';
+    }
+
+    // DEVELOPER_ERROR 10 — build/config issue (wrong SHA-1, wrong client
+    // ID, etc). User can't fix this; we log loudly and show a generic
+    // message so the UI doesn't lecture them about gradlew commands.
+    if ((e.code == 'sign_in_failed' && msg.contains('10')) ||
+        msg.contains('ApiException: 10')) {
+      if (kDebugMode) {
+        debugPrint(
+          'GoogleSignIn DEVELOPER_ERROR: SHA-1 / package / web client ID '
+          'mismatch. Run `cd android && ./gradlew signingReport` and check '
+          'the Android OAuth client in Google Cloud.',
+        );
+      }
+      return 'Google sign-in is unavailable right now. Try again later.';
+    }
+
+    // SIGN_IN_FAILED — catch-all for "Google said no". Often means the
+    // Firebase Google provider is disabled.
+    if (msg.contains('ApiException: 12500')) {
+      return 'Google sign-in failed. Please try again.';
+    }
+
+    // Everything else — soft fallback. No raw error codes in the UI.
+    return 'Google sign-in failed. Please try again.';
   }
 
   // ────────────────────────────────────────────────────────────────

@@ -208,19 +208,44 @@ class PushService {
   /// Pick a destination route from the FCM `data` map.
   ///
   /// Backend convention:
-  ///   - chat / new-message: `{ type: 'new_message', conversationId: '…' }`
-  ///   - everything else (application status, interview, job match,
-  ///     applicant, system): falls through to the notifications inbox.
+  ///   - `new_message`        → opens the conversation
+  ///   - `new_job_match` /
+  ///     `company_new_job`    → opens that job's detail page (loader
+  ///                            screen fetches by id)
+  ///   - `new_applicant`      → opens the recruiter's applicants list
+  ///     for the relevant job
+  ///   - everything else
+  ///     (application status, interview, system, …) → notifications
+  ///     inbox, which has a row-level tap that drills into the relevant
+  ///     entity.
   static void _navigateForData(Map<String, String> data) {
     final nav = navigatorKey.currentState;
     if (nav == null) return;
 
     final type = data['type'] ?? '';
     final convId = data['conversationId'];
+    final jobId = data['jobId'];
 
-    if (type == 'new_message' && convId != null && convId.isNotEmpty) {
-      nav.pushNamed(AppRoutes.chat, arguments: convId);
-      return;
+    switch (type) {
+      case 'new_message':
+        if (convId != null && convId.isNotEmpty) {
+          nav.pushNamed(AppRoutes.chat, arguments: convId);
+          return;
+        }
+        break;
+      case 'new_job_match':
+      case 'company_new_job':
+        if (jobId != null && jobId.isNotEmpty) {
+          nav.pushNamed(AppRoutes.jobDetailById, arguments: jobId);
+          return;
+        }
+        break;
+      case 'new_applicant':
+        if (jobId != null && jobId.isNotEmpty) {
+          nav.pushNamed(AppRoutes.hirerApplicants, arguments: jobId);
+          return;
+        }
+        break;
     }
 
     nav.pushNamed(AppRoutes.notifications);

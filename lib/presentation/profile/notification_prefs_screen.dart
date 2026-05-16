@@ -27,6 +27,7 @@ class _NotificationPrefsScreenState extends State<NotificationPrefsScreen> {
   bool _jobAlerts = true;
   bool _applicationUpdates = true;
   bool _autoApplySummary = true;
+  bool _aiPolish = true;
   String _quietStart = '22:00';
   String _quietEnd = '08:00';
 
@@ -55,6 +56,7 @@ class _NotificationPrefsScreenState extends State<NotificationPrefsScreen> {
         _jobAlerts = data['jobAlerts'] as bool? ?? true;
         _applicationUpdates = data['applicationUpdates'] as bool? ?? true;
         _autoApplySummary = data['autoApplySummary'] as bool? ?? true;
+        _aiPolish = data['aiPolish'] as bool? ?? true;
         _quietStart = (data['quietHoursStart'] as String?) ?? '22:00';
         _quietEnd = (data['quietHoursEnd'] as String?) ?? '08:00';
         _loading = false;
@@ -78,6 +80,7 @@ class _NotificationPrefsScreenState extends State<NotificationPrefsScreen> {
         jobAlerts: _jobAlerts,
         applicationUpdates: _applicationUpdates,
         autoApplySummary: _autoApplySummary,
+        aiPolish: _aiPolish,
         quietHoursStart: _quietStart,
         quietHoursEnd: _quietEnd,
       );
@@ -175,6 +178,16 @@ class _NotificationPrefsScreenState extends State<NotificationPrefsScreen> {
                       subtitle: 'Daily summary of auto-applied jobs',
                       value: _autoApplySummary,
                       onChanged: (v) => setState(() => _autoApplySummary = v),
+                    ),
+                    const SizedBox(height: 16),
+                    _section('AI'),
+                    _channelTile(
+                      icon: Icons.auto_fix_high_rounded,
+                      title: 'AI polish notifications',
+                      subtitle:
+                          'Let AI rewrite alert titles & bodies for clarity. Off keeps the original copy.',
+                      value: _aiPolish,
+                      onChanged: (v) => setState(() => _aiPolish = v),
                     ),
                     const SizedBox(height: 16),
                     _section('Quiet hours'),

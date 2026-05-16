@@ -20,6 +20,56 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// Convert any error thrown from an HTTP call (network, timeout, parse,
+/// or an `ApiException` from a non-2xx response) into a single short
+/// user-readable sentence. Use this anywhere a raw exception would
+/// otherwise leak through to a snackbar — `'Upload failed: $e'` style
+/// strings should pass `e` through here first.
+///
+/// Rules:
+///   • `ApiException` with 5xx  → server is busy / try later
+///   • `ApiException` with 401/403 → session expired
+///   • `ApiException` with 0      → backend unreachable (set by [_send])
+///   • Any other `ApiException`   → use the backend's own message
+///                                  (already passes through Zod / domain
+///                                  validation — safe to show)
+///   • SocketException / ClientException / "connection refused" /
+///     "failed host lookup" / "network is unreachable" → unreachable
+///   • TimeoutException / "timed out"          → slow / try again
+///   • Anything else                           → generic fallback
+String friendlyMessage(Object error) {
+  if (error is ApiException) {
+    if (error.statusCode >= 500) {
+      return 'Our servers are taking a break. Please try again in a minute.';
+    }
+    if (error.statusCode == 401 || error.statusCode == 403) {
+      return 'Your session expired. Please sign in again.';
+    }
+    if (error.statusCode == 0) {
+      return "Can't reach the server. Check your connection and try again in a minute.";
+    }
+    // 4xx with a backend message that's already user-facing (Zod /
+    // controller-side validation messages, "Email already in use", …).
+    return error.message;
+  }
+  final s = error.toString().toLowerCase();
+  if (s.contains('socketexception') ||
+      s.contains('clientexception') ||
+      s.contains('connection refused') ||
+      s.contains('failed host lookup') ||
+      s.contains('network is unreachable') ||
+      s.contains('connection closed') ||
+      s.contains('handshake')) {
+    return "Can't reach the server. Check your connection and try again in a minute.";
+  }
+  if (s.contains('timeoutexception') ||
+      s.contains('timed out') ||
+      s.contains('deadline exceeded')) {
+    return 'Server is taking too long to respond. Please try again.';
+  }
+  return 'Something went wrong. Please try again.';
+}
+
 typedef _Sender = Future<http.Response> Function(String accessToken);
 
 class ApiClient {
@@ -217,6 +267,28 @@ class ApiClient {
     return res;
   }
 
+  /// POST that returns the raw response — used when the server replies
+  /// with a binary body (e.g. PDF download) rather than JSON. The same
+  /// auth-refresh wrapper applies.
+  Future<http.Response> postRaw(
+    String path, {
+    Object? body,
+    bool auth = true,
+  }) async {
+    final res = await _runWithAuth(
+      (token) => _http.post(
+        _uri(path),
+        headers: _headers(token, auth, json: true),
+        body: body == null ? null : jsonEncode(body),
+      ),
+      auth: auth,
+    );
+    if (res.statusCode >= 400) {
+      throw ApiException(res.statusCode, _safeMessage(res));
+    }
+    return res;
+  }
+
   Map<String, String> _headers(String token, bool auth, {bool json = false}) {
     final headers = <String, String>{
       'Accept': 'application/json',
@@ -227,8 +299,19 @@ class ApiClient {
   }
 
   Future<dynamic> _send(_Sender sender, {required bool auth}) async {
-    final res = await _runWithAuth(sender, auth: auth);
-    return _decode(res);
+    try {
+      final res = await _runWithAuth(sender, auth: auth);
+      return _decode(res);
+    } on ApiException {
+      // Backend-side error with a known status; already user-friendly.
+      rethrow;
+    } catch (e) {
+      // SocketException / ClientException / TimeoutException / DNS /
+      // TLS handshake — none of these belong in a UI snackbar verbatim.
+      // Wrap with status 0 so `friendlyMessage` and `toString()` both
+      // surface a clean "Can't reach the server…" message.
+      throw ApiException(0, friendlyMessage(e));
+    }
   }
 
   Future<http.Response> _runWithAuth(_Sender sender,

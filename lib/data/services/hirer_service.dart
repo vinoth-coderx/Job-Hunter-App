@@ -134,8 +134,74 @@ class HirerService {
     return HirerStats.fromJson(ApiClient.unwrapMap(raw));
   }
 
+  /// "Needs attention" snapshot — pure data aggregation, no AI cost.
+  /// Returns the four pipeline blockers (appeals, flagged jobs,
+  /// unreviewed top matches, stale jobs) so the hirer can act on the
+  /// most-time-sensitive items the moment they land on the dashboard.
+  /// Returns the loose dynamic Map so the screen can read counts +
+  /// topItem without a dedicated model class.
+  Future<Map<String, dynamic>> getAttention() async {
+    final raw = await _api.get('hirer/attention');
+    return ApiClient.unwrapMap(raw);
+  }
+
+  /// AI weekly digest for the hirer dashboard. Returns the headline +
+  /// bullets directly from the backend; failures bubble as exceptions
+  /// so the dashboard widget can render an empty state. Same-day cache
+  /// on the server side means visits within 24h are quota-free.
+  Future<({String headline, List<String> bullets, bool cached, bool usedAi})>
+      getDigest() async {
+    final raw = await _api.get('hirer/digest');
+    final data = ApiClient.unwrapMap(raw);
+    return (
+      headline: (data['headline'] ?? '').toString(),
+      bullets: (data['bullets'] as List?)
+              ?.map((e) => e.toString())
+              .where((s) => s.isNotEmpty)
+              .toList() ??
+          const <String>[],
+      cached: data['cached'] as bool? ?? false,
+      usedAi: data['usedAi'] as bool? ?? false,
+    );
+  }
+
   Future<HirerProfile> getPublicCompany(String id) async {
     final raw = await _api.get('hirer/profile/public/$id', auth: false);
     return HirerProfile.fromJson(ApiClient.unwrapMap(raw));
+  }
+
+  /// AI-draft the "About" section for the company profile. Used by the
+  /// hirer setup screen as a one-tap kickstart so first-time hirers
+  /// don't sit staring at an empty 5000-char text box.
+  Future<({String description, bool usedAi, bool cached})>
+      generateCompanyDescription({
+    String? companyName,
+    String? industry,
+    String? sizeBand,
+    String? hqLocation,
+    String? whatYouDo,
+    String? toneHint,
+  }) async {
+    final body = <String, dynamic>{
+      if (companyName != null && companyName.trim().isNotEmpty)
+        'companyName': companyName.trim(),
+      if (industry != null && industry.trim().isNotEmpty)
+        'industry': industry.trim(),
+      if (sizeBand != null && sizeBand.trim().isNotEmpty)
+        'sizeBand': sizeBand.trim(),
+      if (hqLocation != null && hqLocation.trim().isNotEmpty)
+        'hqLocation': hqLocation.trim(),
+      if (whatYouDo != null && whatYouDo.trim().isNotEmpty)
+        'whatYouDo': whatYouDo.trim(),
+      if (toneHint != null) 'toneHint': toneHint,
+    };
+    final raw =
+        await _api.post('hirer/profile/generate-description', body: body);
+    final data = ApiClient.unwrapMap(raw);
+    return (
+      description: (data['description'] ?? '').toString(),
+      usedAi: data['usedAi'] as bool? ?? false,
+      cached: data['cached'] as bool? ?? false,
+    );
   }
 }

@@ -225,7 +225,15 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<JobProvider>();
-    final allApps = provider.applications;
+    // The provider's `applications` list carries every record so the home
+    // feed can dedupe "Already Applied" badges across native + external.
+    // This tab only tracks in-app applies though — external-redirect
+    // applies (LinkedIn / company site) have no status workflow on our
+    // end, so they'd just sit at "Applied" forever and clutter the
+    // tracker. Filter them out at the view layer.
+    final allApps = provider.applications
+        .where((a) => a.applyType != ApplyType.externalManual)
+        .toList(growable: false);
     final counts = _bucketCounts(allApps);
     final filtered = _filterApplications(allApps);
 

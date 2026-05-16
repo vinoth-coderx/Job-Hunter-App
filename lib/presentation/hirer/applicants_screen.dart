@@ -4,11 +4,16 @@ import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/app_snackbar.dart';
 import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/applicant_model.dart';
+import '../../data/services/ai_service.dart';
+import '../../data/services/applicants_service.dart';
+import '../../providers/ai_quota_provider.dart';
 import '../../providers/applicants_provider.dart';
 import '../widgets/app_avatar.dart';
 import 'applicant_detail_screen.dart';
+import 'candidate_suggestions_sheet.dart';
 
 /// Applicants screen.
 ///   - When `jobId` arg is provided, lists applicants for that one job.
@@ -33,6 +38,12 @@ class _ApplicantsScreenState extends State<ApplicantsScreen>
     'rejected',
   ];
 
+  /// applicationId -> AI ranking. Empty until the hirer hits "Rank with AI".
+  /// Cleared whenever the filter changes (the new list might be a different
+  /// applicant set, so the old ranks no longer apply 1:1).
+  final Map<String, RankedApplicant> _ranked = {};
+  bool _ranking = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,6 +51,7 @@ class _ApplicantsScreenState extends State<ApplicantsScreen>
   }
 
   Future<void> _refresh() {
+    setState(_ranked.clear);
     final prov = context.read<ApplicantsProvider>();
     if (widget.jobId != null) {
       return prov.loadForJob(jobId: widget.jobId!);
@@ -49,11 +61,49 @@ class _ApplicantsScreenState extends State<ApplicantsScreen>
   }
 
   Future<void> _setFilter(String status) async {
+    setState(_ranked.clear);
     final prov = context.read<ApplicantsProvider>();
     if (widget.jobId != null) {
       await prov.loadForJob(jobId: widget.jobId!, status: status);
     } else {
       await prov.loadAll(status: status);
+    }
+  }
+
+  /// Trigger AI ranking for the currently scoped job. Disabled when
+  /// viewing the all-applicants list because ranking is per-job.
+  Future<void> _rankWithAi() async {
+    final jobId = widget.jobId;
+    if (jobId == null || _ranking) return;
+    setState(() => _ranking = true);
+    try {
+      final ranked = await ApplicantsService.instance.rankForJob(jobId: jobId);
+      if (!mounted) return;
+      setState(() {
+        _ranked
+          ..clear()
+          ..addEntries(ranked.map((r) => MapEntry(r.applicationId, r)));
+      });
+      // Quota snapshot lives on the response wrapper, not directly on
+      // rankForJob — refresh the banner separately so the user sees the
+      // post-call quota immediately.
+      await context.read<AiQuotaProvider>().refresh();
+      if (mounted) {
+        AppSnackbar.success(
+          context,
+          ranked.isEmpty
+              ? 'No applicants to rank yet.'
+              : 'Ranked ${ranked.length} candidates.',
+        );
+      }
+    } on AiQuotaExceededException catch (e) {
+      if (!mounted) return;
+      context.read<AiQuotaProvider>().update(e.quota);
+      AppSnackbar.error(context, e.message);
+    } catch (e) {
+      if (mounted) AppSnackbar.error(context, 'Rank failed: $e');
+    } finally {
+      if (mounted) setState(() => _ranking = false);
     }
   }
 
@@ -94,6 +144,39 @@ class _ApplicantsScreenState extends State<ApplicantsScreen>
         elevation: 0,
         backgroundColor: Colors.transparent,
         foregroundColor: context.textPrimary,
+        actions: [
+          if (widget.jobId != null) ...[
+            IconButton(
+              tooltip: 'Suggested candidates',
+              onPressed: () => CandidateSuggestionsSheet.show(
+                context,
+                jobId: widget.jobId!,
+                jobTitle:
+                    context.read<ApplicantsProvider>().scopedJobTitle,
+              ),
+              icon: const Icon(Icons.person_search),
+              color: AppColors.primary,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton.icon(
+                onPressed: _ranking ? null : _rankWithAi,
+                icon: _ranking
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.auto_awesome, size: 16),
+                label: Text(_ranking ? 'Ranking…' : 'Rank with AI'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
       body: Column(
         children: [
@@ -123,24 +206,36 @@ class _ApplicantsScreenState extends State<ApplicantsScreen>
                     ),
                   );
                 }
+                // When AI ranking has run, sort the list by aiScore desc so
+                // the top picks bubble to the top. Unranked rows fall to the
+                // bottom in their original order (rank null → infinity).
+                final items = [...prov.items];
+                if (_ranked.isNotEmpty) {
+                  items.sort((a, b) {
+                    final ra = _ranked[a.applicationId]?.rank ?? 1 << 20;
+                    final rb = _ranked[b.applicationId]?.rank ?? 1 << 20;
+                    return ra.compareTo(rb);
+                  });
+                }
                 return RefreshIndicator(
                   onRefresh: _refresh,
                   child: ListView.separated(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                    itemCount: prov.items.length,
+                    itemCount: items.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (_, i) => _ApplicantCard(
-                      applicant: prov.items[i],
+                      applicant: items[i],
+                      ranking: _ranked[items[i].applicationId],
                       onTap: () => guard(
                         () async {
                           await Navigator.of(context).push(MaterialPageRoute(
                             builder: (_) => ApplicantDetailScreen(
-                                applicationId: prov.items[i].applicationId),
+                                applicationId: items[i].applicationId),
                           ));
                           // Re-fetch in case status changed in the detail view.
                           if (mounted) _refresh();
                         },
-                        key: 'open-${prov.items[i].applicationId}',
+                        key: 'open-${items[i].applicationId}',
                       ),
                     ),
                   ),
@@ -184,14 +279,27 @@ class _ApplicantsScreenState extends State<ApplicantsScreen>
 
 class _ApplicantCard extends StatelessWidget {
   final Applicant applicant;
+  final RankedApplicant? ranking;
   final VoidCallback onTap;
-  const _ApplicantCard({required this.applicant, required this.onTap});
+  const _ApplicantCard({
+    required this.applicant,
+    required this.onTap,
+    this.ranking,
+  });
 
   Color _matchColor(BuildContext context) {
     final s = applicant.matchScore ?? 0;
     if (s >= 75) return AppColors.success;
     if (s >= 50) return AppColors.warning;
     return context.textTertiary;
+  }
+
+  Color _aiScoreColor() {
+    final s = ranking?.aiScore ?? 0;
+    if (s >= 75) return AppColors.success;
+    if (s >= 60) return AppColors.primary;
+    if (s >= 40) return AppColors.warning;
+    return AppColors.urgent;
   }
 
   Color _statusColor() {
@@ -213,6 +321,7 @@ class _ApplicantCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = applicant.seeker;
+    final r = ranking;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
@@ -221,78 +330,166 @@ class _ApplicantCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: context.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: context.cardBorder),
+          border: Border.all(
+            color: r != null && r.rank <= 3
+                ? AppColors.primary.withValues(alpha: 0.40)
+                : context.cardBorder,
+            width: r != null && r.rank <= 3 ? 1.4 : 1,
+          ),
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AppAvatar(
-              url: s?.avatar,
-              name: s?.fullName,
-              size: 48,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    s?.fullName ?? 'Unknown applicant',
-                    style: AppTextStyles.bodyMedium.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: context.textPrimary),
-                  ),
-                  if (s?.headline != null && s!.headline!.isNotEmpty)
-                    Text(
-                      s.headline!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTextStyles.bodySmall
-                          .copyWith(color: context.textSecondary),
-                    ),
-                  const SizedBox(height: 6),
-                  Row(
+            Row(
+              children: [
+                AppAvatar(
+                  url: s?.avatar,
+                  name: s?.fullName,
+                  size: 48,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _statusColor().withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          applicant.status.toUpperCase(),
-                          style: AppTextStyles.labelSmall
-                              .copyWith(color: _statusColor()),
-                        ),
+                      Row(
+                        children: [
+                          if (r != null) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color:
+                                    _aiScoreColor().withValues(alpha: 0.14),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color:
+                                      _aiScoreColor().withValues(alpha: 0.30),
+                                ),
+                              ),
+                              child: Text(
+                                '#${r.rank}',
+                                style: AppTextStyles.labelSmall.copyWith(
+                                  color: _aiScoreColor(),
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 10.5,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          Expanded(
+                            child: Text(
+                              s?.fullName ?? 'Unknown applicant',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyles.bodyMedium.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: context.textPrimary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      if (applicant.appliedAt != null)
+                      if (s?.headline != null && s!.headline!.isNotEmpty)
                         Text(
-                          DateFormat('d MMM').format(
-                              applicant.appliedAt!.toLocal()),
+                          s.headline!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: AppTextStyles.bodySmall
-                              .copyWith(color: context.textTertiary),
+                              .copyWith(color: context.textSecondary),
                         ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _statusColor().withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              applicant.status.toUpperCase(),
+                              style: AppTextStyles.labelSmall
+                                  .copyWith(color: _statusColor()),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          if (applicant.appliedAt != null)
+                            Text(
+                              DateFormat('d MMM').format(
+                                  applicant.appliedAt!.toLocal()),
+                              style: AppTextStyles.bodySmall
+                                  .copyWith(color: context.textTertiary),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                if (r != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _aiScoreColor().withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: _aiScoreColor().withValues(alpha: 0.30),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.auto_awesome,
+                            size: 11, color: _aiScoreColor()),
+                        const SizedBox(width: 3),
+                        Text(
+                          '${r.aiScore}',
+                          style: AppTextStyles.labelSmall.copyWith(
+                            color: _aiScoreColor(),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (applicant.matchScore != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _matchColor(context).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${applicant.matchScore!.round()}%',
+                      style: AppTextStyles.labelSmall
+                          .copyWith(color: _matchColor(context)),
+                    ),
+                  ),
+              ],
             ),
-            const SizedBox(width: 8),
-            if (applicant.matchScore != null)
+            if (r != null && r.summary.isNotEmpty) ...[
+              const SizedBox(height: 10),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: _matchColor(context).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
+                  color: context.surfaceVariant,
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  '${applicant.matchScore!.round()}%',
-                  style: AppTextStyles.labelSmall
-                      .copyWith(color: _matchColor(context)),
+                  r.summary,
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: context.textSecondary,
+                    height: 1.35,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
+            ],
           ],
         ),
       ),

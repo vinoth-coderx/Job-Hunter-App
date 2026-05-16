@@ -63,13 +63,25 @@ class AppliedService {
     return _toApplyResult(raw);
   }
 
+  /// Lists the seeker's applications.
+  ///
+  /// [type] filters the underlying records:
+  ///   - `'native'`   → in-app Easy Apply only (one_click / custom_form /
+  ///                    auto_apply). This is what the "My Applications"
+  ///                    tab uses so external-redirect applies don't
+  ///                    clutter the tracker.
+  ///   - `'external'` → applications recorded when the seeker tapped the
+  ///                    external apply link (LinkedIn / company site).
+  ///   - `null`       → both (legacy callers).
   Future<List<JobApplication>> list({
     ApplicationStatus? status,
+    String? type,
     int page = 1,
     int limit = 50,
   }) async {
     final raw = await _api.get('applied', query: {
       if (status != null) 'status': _statusToApi(status),
+      if (type != null) 'type': type,
       'page': page,
       'limit': limit,
     });

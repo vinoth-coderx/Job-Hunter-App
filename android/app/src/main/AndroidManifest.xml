@@ -32,6 +32,37 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!--
+              Android App Links — https://jobhunter.app/job/<id> opens
+              the app directly when the user has it installed and the
+              domain's .well-known/assetlinks.json has been published
+              with this app's SHA-256 fingerprint (auto-verified by
+              Android because of android:autoVerify="true").
+
+              Without assetlinks.json, the OS still resolves the link —
+              it just shows the "Open with…" picker the first time
+              instead of jumping straight into the app.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                      android:host="jobhunter.app"/>
+            </intent-filter>
+            <!--
+              Custom-scheme fallback used by transactional emails and
+              push payloads that prefer "always opens the app" semantics
+              over the App Links domain dance. No domain verification
+              needed — useful for development and as a back-stop if the
+              user clicks a link before the assetlinks.json has propagated.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="jobhunter"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -11,7 +11,6 @@ import '../../providers/ai_quota_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/coins_provider.dart';
 import '../../providers/job_provider.dart';
-import '../../providers/resume_profile_provider.dart';
 import '../widgets/app_avatar.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
@@ -137,9 +136,12 @@ class _QuickApplySheetState extends State<QuickApplySheet> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final resume = context.watch<ResumeProfileProvider>();
     final user = auth.user;
-    final hasResume = resume.profile.resumeFileName.isNotEmpty;
+    // Resume presence now derives from the flat profile's extracted text
+    // blob — the old nested resumeProfile.resumeFileName field is gone.
+    final hasResume = (user?.resumeText ?? '').trim().isNotEmpty;
+    final resumeFileName =
+        hasResume ? 'Resume on file' : '';
 
     return DraggableScrollableSheet(
       initialChildSize: 0.88,
@@ -172,7 +174,7 @@ class _QuickApplySheetState extends State<QuickApplySheet> {
             const SizedBox(height: 10),
             _ResumeStatus(
               hasResume: hasResume,
-              fileName: resume.profile.resumeFileName,
+              fileName: resumeFileName,
             ),
             if (widget.job.matchScore != null) ...[
               const SizedBox(height: 10),

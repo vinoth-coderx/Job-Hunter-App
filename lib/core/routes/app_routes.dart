@@ -4,14 +4,18 @@ class AppRoutes {
   static const String splash = '/';
   static const String login = '/login';
   static const String emailAuth = '/email-auth';
+  // Recruiter (hirer) signup / login entry point. Distinct from the
+  // seeker /login route so the post-auth flow can route new accounts
+  // through hirer profile setup + activeRole switch before /main.
+  static const String recruiterLogin = '/recruiter-login';
   static const String forgotPassword = '/forgot-password';
-  static const String rolePicker = '/role-picker';
-  static const String onboarding = '/onboarding';
   static const String main = '/main';
   static const String search = '/search';
   static const String jobDetail = '/job-detail';
-  static const String profileInformation = '/profile-information';
-  static const String resumeProfile = '/resume-profile';
+  // Variant of [jobDetail] entered from a push tap or a deep link where
+  // we only have the job id, not the full Job model. The handler screen
+  // fetches the job from the API and forwards to [jobDetail].
+  static const String jobDetailById = '/job-detail-by-id';
   static const String editField = '/edit-field';
   static const String helpSupport = '/help-support';
   static const String about = '/about';
@@ -33,6 +37,9 @@ class AppRoutes {
   static const String companyProfile = '/company-profile';
   static const String profileOptimizer = '/profile-optimizer';
   static const String skillGap = '/skill-gap';
+  static const String atsScore = '/ats-score';
+  static const String aiAssistant = '/ai-assistant';
+  static const String aiUsageHistory = '/ai-usage-history';
   static const String skillAssessments = '/skill-assessments';
   static const String assessmentQuiz = '/assessment-quiz';
   static const String assessmentResult = '/assessment-result';

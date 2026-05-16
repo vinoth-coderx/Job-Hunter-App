@@ -55,4 +55,26 @@ class AlertService {
   Future<void> remove(String id) async {
     await _api.delete('alerts/$id');
   }
+
+  /// AI-suggested labels for the alert the user is composing. 7d
+  /// server-side cache + weight 0, so re-asking on the same filter
+  /// combo never burns quota. Returns at most 3 suggestions; falls
+  /// back to a heuristic when no provider is configured.
+  Future<List<String>> suggestNames({
+    String query = '',
+    List<String> filters = const [],
+    String? location,
+  }) async {
+    final raw = await _api.post('alerts/suggest-name', body: {
+      'query': query,
+      'filters': filters,
+      if (location != null && location.isNotEmpty) 'location': location,
+    });
+    final data = ApiClient.unwrapMap(raw);
+    return (data['names'] as List?)
+            ?.map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList() ??
+        const [];
+  }
 }

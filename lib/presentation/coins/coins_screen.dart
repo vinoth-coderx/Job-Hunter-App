@@ -190,9 +190,10 @@ class _CoinsScreenState extends State<CoinsScreen> {
                     cta: profileDone ? 'Profile complete ✓' : 'Update profile',
                     enabled: !profileDone,
                     progress: _completion / 100,
-                    onTap: () => Navigator.pushNamed(
+                    onTap: () => Navigator.pushNamedAndRemoveUntil(
                       context,
-                      AppRoutes.profileInformation,
+                      AppRoutes.main,
+                      (_) => false,
                     ),
                   ),
                   const SizedBox(height: 12),

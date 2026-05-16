@@ -5,9 +5,12 @@ import 'package:provider/provider.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/app_snackbar.dart';
 import '../../core/utils/tap_guard_mixin.dart';
 import '../../data/models/hirer_job_model.dart';
+import '../../data/services/hirer_job_service.dart';
 import '../../providers/hirer_jobs_provider.dart';
+import 'candidate_suggestions_sheet.dart';
 
 class ManageJobsScreen extends StatefulWidget {
   const ManageJobsScreen({super.key});
@@ -153,6 +156,38 @@ class _JobCardState extends State<_JobCard> with TapGuardMixin<_JobCard> {
     return context.textSecondary;
   }
 
+  /// Opens the appeal sheet for the current job. The backend rejects a
+  /// duplicate while one is pending, so we re-load the list afterwards
+  /// to flip the moderation pill to its new state.
+  Future<void> _showAppealSheet(BuildContext context) async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => const _AppealReasonSheet(),
+    );
+    if (reason == null || reason.isEmpty) return;
+    if (!context.mounted) return;
+    try {
+      await HirerJobService.instance.appealModeration(
+        jobId: job.id,
+        reason: reason,
+      );
+      if (!context.mounted) return;
+      AppSnackbar.success(
+        context,
+        'Appeal submitted. Admin will review shortly.',
+      );
+      await context.read<HirerJobsProvider>().load(status: job.status);
+    } catch (e) {
+      if (!context.mounted) return;
+      AppSnackbar.error(context, 'Could not submit appeal: $e');
+    }
+  }
+
   void _handleAction(BuildContext context, _JobMenuAction action) {
     // Navigation actions debounce by time (no async work to wait on);
     // status mutations use the in-flight guard so the popup can't fire
@@ -184,6 +219,20 @@ class _JobCardState extends State<_JobCard> with TapGuardMixin<_JobCard> {
       case _JobMenuAction.close:
       case _JobMenuAction.deleteDraft:
         guard(() => _runMutation(context, action), key: 'mutate');
+        return;
+      case _JobMenuAction.appealModeration:
+        guard(() => _showAppealSheet(context), key: 'appeal');
+        return;
+      case _JobMenuAction.suggestCandidates:
+        debounceTap(
+          () => CandidateSuggestionsSheet.show(
+            context,
+            jobId: job.id,
+            jobTitle: job.title,
+          ),
+          key: 'nav',
+        );
+        return;
     }
   }
 
@@ -240,7 +289,9 @@ class _JobCardState extends State<_JobCard> with TapGuardMixin<_JobCard> {
         break;
       case _JobMenuAction.viewApplicants:
       case _JobMenuAction.kanban:
-        // Handled in _handleAction via debounceTap.
+      case _JobMenuAction.appealModeration:
+      case _JobMenuAction.suggestCandidates:
+        // Handled in _handleAction directly.
         break;
     }
   }
@@ -323,6 +374,12 @@ class _JobCardState extends State<_JobCard> with TapGuardMixin<_JobCard> {
                   ),
               ],
             ),
+            if (job.moderationStatus == 'rejected') ...[
+              const SizedBox(height: 10),
+              _AppealRejectedRow(
+                onAppeal: () => _showAppealSheet(context),
+              ),
+            ],
             const SizedBox(height: 8),
             Row(
               children: [
@@ -386,6 +443,22 @@ class _JobCardState extends State<_JobCard> with TapGuardMixin<_JobCard> {
                           title: Text('Pipeline'),
                         ),
                       ),
+                    if (job.status == 'active' || job.status == 'paused')
+                      const PopupMenuItem(
+                        value: _JobMenuAction.suggestCandidates,
+                        child: ListTile(
+                          leading: Icon(Icons.person_search),
+                          title: Text('AI candidate suggestions'),
+                        ),
+                      ),
+                    if (job.moderationStatus == 'rejected')
+                      const PopupMenuItem(
+                        value: _JobMenuAction.appealModeration,
+                        child: ListTile(
+                          leading: Icon(Icons.gavel_outlined),
+                          title: Text('Appeal moderation'),
+                        ),
+                      ),
                   ],
                 ),
               ],
@@ -423,4 +496,151 @@ enum _JobMenuAction {
   deleteDraft,
   viewApplicants,
   kanban,
+  appealModeration,
+  suggestCandidates,
+}
+
+/// Inline banner shown on rejected jobs in the manage list. The "Appeal"
+/// button opens the reason sheet — see [_AppealReasonSheet].
+class _AppealRejectedRow extends StatelessWidget {
+  final VoidCallback onAppeal;
+  const _AppealRejectedRow({required this.onAppeal});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: AppColors.urgent.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: AppColors.urgent.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.gpp_bad_outlined,
+              size: 16, color: AppColors.urgent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'AI moderation rejected this listing.',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.urgent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onAppeal,
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.urgent,
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+            child: const Text('Appeal'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet that collects the hirer's appeal reason. Returns the
+/// trimmed reason string when submitted, or null when dismissed.
+/// Backend requires 20+ chars; we enforce it client-side too so a
+/// short note never burns a network round-trip.
+class _AppealReasonSheet extends StatefulWidget {
+  const _AppealReasonSheet();
+
+  @override
+  State<_AppealReasonSheet> createState() => _AppealReasonSheetState();
+}
+
+class _AppealReasonSheetState extends State<_AppealReasonSheet> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _ctrl.text.trim();
+    if (text.length < 20) return;
+    Navigator.of(context).pop(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + viewInsets),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                color: context.cardBorder,
+                borderRadius: BorderRadius.circular(50),
+              ),
+            ),
+          ),
+          Text(
+            'Appeal moderation decision',
+            style: AppTextStyles.h4.copyWith(color: context.textPrimary),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Tell admin why this job was wrongly flagged. Be specific — '
+            'mention the bits the AI got wrong (max 2000 chars).',
+            style: AppTextStyles.bodySmall.copyWith(
+              color: context.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctrl,
+            maxLines: 6,
+            minLines: 4,
+            maxLength: 2000,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText:
+                  'e.g. The AI flagged my legitimate referral bonus as MLM. '
+                  'Please re-review.',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Spacer(),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: 8),
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _ctrl,
+                builder: (_, value, __) => FilledButton(
+                  onPressed:
+                      value.text.trim().length >= 20 ? _submit : null,
+                  child: const Text('Submit appeal'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }

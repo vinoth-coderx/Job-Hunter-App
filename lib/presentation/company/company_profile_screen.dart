@@ -9,6 +9,8 @@ import '../../data/models/job_model.dart';
 import '../../data/services/company_service.dart';
 import '../widgets/app_avatar.dart';
 import '../widgets/job_card.dart';
+import '../widgets/report_sheet.dart';
+import '../widgets/trust_badges.dart';
 import 'add_review_sheet.dart';
 
 class CompanyProfileScreen extends StatefulWidget {
@@ -111,6 +113,25 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen>
         title: Text(p.companyName),
         elevation: 0,
         backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: 'Report company',
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final ok = await showReportSheet(
+                context: context,
+                subjectType: 'company',
+                subjectId: p.id,
+              );
+              if (ok && mounted) {
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('Report submitted.')),
+                );
+              }
+            },
+          ),
+        ],
         bottom: TabBar(
           controller: _tabs,
           labelColor: AppColors.primary,
@@ -125,6 +146,23 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen>
       body: Column(
         children: [
           _header(p),
+          if (p.approvalStatus == 'suspended' || p.approvalStatus == 'banned')
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: FraudWarningBanner(
+                message: p.approvalStatus == 'banned'
+                    ? 'This company has been banned from the platform. Do not apply or share personal information.'
+                    : 'This company is currently suspended pending review. We do not recommend applying right now.',
+              ),
+            )
+          else if (!p.isVerified && p.trustScore < 40)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: FraudWarningBanner(
+                message:
+                    'This company is unverified with low trust signals. Never pay any recruiter to apply and never share OTPs or bank details.',
+              ),
+            ),
           Expanded(
             child: TabBarView(
               controller: _tabs,
@@ -169,17 +207,23 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen>
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (p.isVerified)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 4),
-                        child: Icon(Icons.verified,
-                            size: 16, color: AppColors.primary),
-                      ),
+                    if (p.isVerified) ...[
+                      const SizedBox(width: 6),
+                      const VerifiedBadge(),
+                    ],
                   ],
                 ),
+                const SizedBox(height: 6),
                 Wrap(
-                  spacing: 10,
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
+                    SafeApplyBadge.fromFlags(
+                      companyVerified: p.isVerified,
+                      recruiterApproved: p.approvalStatus == 'approved',
+                      trustScore: p.trustScore,
+                    ),
                     if (p.industry != null && p.industry!.isNotEmpty)
                       Text(p.industry!,
                           style: AppTextStyles.bodySmall

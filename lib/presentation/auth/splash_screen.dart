@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../data/services/storage_service.dart';
 import '../../providers/auth_provider.dart';
 import '../widgets/app_logo.dart';
 
@@ -24,15 +25,25 @@ class _SplashScreenState extends State<SplashScreen>
   late final Animation<double> _logoScale;
   late final Animation<double> _textFade;
   late final Animation<Offset> _textSlide;
-  late final Future<void> _authFuture;
+  Future<void>? _authFuture;
 
   // Becomes true once the intro slide-ins finish — gates the feature
   // rotator + pulsing dots so they don't fight the entrance animation.
   bool _showRotator = false;
 
+  // Fast path: when the user already has a session on disk (returning
+  // user OR Android process-death recovery after an external apply
+  // browser launch), we skip the 2-second intro and navigate to /main
+  // on the very next frame so the "splash flash" doesn't feel like an
+  // app restart. Auth refresh still runs in the background via
+  // checkAuthStatus → _refreshUserInBackground.
+  bool _fastPath = false;
+
   @override
   void initState() {
     super.initState();
+
+    _fastPath = StorageService.isLoggedIn();
 
     _logoController = AnimationController(
       vsync: this,
@@ -62,10 +73,28 @@ class _SplashScreenState extends State<SplashScreen>
       CurvedAnimation(parent: _textController, curve: Curves.easeOutCubic),
     );
 
-    // Kick off the auth check in parallel with the intro animations so the
-    // splash doesn't serially wait on storage/network after the animation ends.
-    // 10s timeout is a safety net: if the backend never responds we bounce
-    // to login rather than leaving the user staring at the rotator forever.
+    if (_fastPath) {
+      // Existing session on disk — bypass animations and navigate to
+      // /main as soon as the first frame is mounted. The AuthProvider
+      // refresh runs in the background and updates the home screen
+      // without re-showing the splash.
+      unawaited(
+        context
+            .read<AuthProvider>()
+            .checkAuthStatus()
+            .timeout(const Duration(seconds: 10), onTimeout: () {}),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(context, AppRoutes.main);
+      });
+      return;
+    }
+
+    // No session yet — full intro animation while we resolve auth in
+    // parallel. 10s timeout is a safety net: if the backend never
+    // responds we bounce to login rather than leaving the user staring
+    // at the rotator forever.
     _authFuture = context
         .read<AuthProvider>()
         .checkAuthStatus()
@@ -88,7 +117,8 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _navigate() async {
-    await _authFuture;
+    final pending = _authFuture;
+    if (pending != null) await pending;
     if (!mounted) return;
     final auth = context.read<AuthProvider>();
 
@@ -96,7 +126,7 @@ class _SplashScreenState extends State<SplashScreen>
     // straight to /main. Onboarding is only triggered from the fresh
     // signup paths in login_screen / email_auth_screen — never from
     // the resume-existing-session splash flow.
-    if (auth.isAuthenticated || auth.isGuest) {
+    if (auth.isAuthenticated) {
       Navigator.pushReplacementNamed(context, AppRoutes.main);
       return;
     }
@@ -118,6 +148,15 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Fast path paints a single flat gradient frame (no logo, no
+    // animations) so the navigator can replace this route on the next
+    // tick without showing the full splash treatment to a returning user.
+    if (_fastPath) {
+      return const Scaffold(
+        backgroundColor: _logoNavyDeep,
+        body: SizedBox.expand(),
+      );
+    }
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(

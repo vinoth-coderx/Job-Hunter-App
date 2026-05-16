@@ -3,7 +3,10 @@ import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/app_snackbar.dart';
 import '../../data/models/hirer_job_model.dart';
+import '../../data/services/hirer_job_service.dart';
+import '../../providers/ai_quota_provider.dart';
 import '../../providers/hirer_jobs_provider.dart';
 import '../widgets/app_text.dart';
 import '../widgets/custom_button.dart';
@@ -275,6 +278,18 @@ class _PostJobScreenState extends State<PostJobScreen> {
           _h('Details'),
           _field(_description, 'Job description (min 20 chars) *',
               maxLines: 8, maxLength: 20000),
+          if (_description.text.trim().length >= 50)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _polishJd,
+                icon: const Icon(Icons.auto_awesome, size: 16),
+                label: const Text('Polish with AI'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                ),
+              ),
+            ),
           _chipInput(
             controller: _responsibilityInput,
             placeholder: 'Add a responsibility',
@@ -408,12 +423,21 @@ class _PostJobScreenState extends State<PostJobScreen> {
                 child: AppText.body('Screening questions (max 5)',
                     fontWeight: FontWeight.w600),
               ),
-              if (_screeningQuestions.length < 5)
+              if (_screeningQuestions.length < 5) ...[
+                TextButton.icon(
+                  onPressed: _generateScreeningQuestions,
+                  icon: const Icon(Icons.auto_awesome, size: 16),
+                  label: const Text('AI suggest'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                  ),
+                ),
                 TextButton.icon(
                   onPressed: _addScreening,
                   icon: const Icon(Icons.add),
                   label: const Text('Add'),
                 ),
+              ],
             ],
           ),
           ..._screeningQuestions.asMap().entries.map(
@@ -646,6 +670,265 @@ class _PostJobScreenState extends State<PostJobScreen> {
     );
     if (q != null) setState(() => _screeningQuestions.add(q));
   }
+
+  /// AI polish for the current JD draft. Opens a side-by-side preview
+  /// sheet showing the rewritten body + the changes applied; the hirer
+  /// chooses to accept or reject. We never auto-replace because the
+  /// rewrite changes how the user's draft reads — silent overwrites
+  /// would be jarring.
+  Future<void> _polishJd() async {
+    final title = _title.text.trim();
+    final original = _description.text.trim();
+    if (title.length < 3 || original.length < 50) {
+      AppSnackbar.error(
+        context,
+        'Add a title and at least 50 characters of description first.',
+      );
+      return;
+    }
+    try {
+      final res = await HirerJobService.instance.polishJd(
+        title: title,
+        description: original,
+      );
+      if (!mounted) return;
+      if (!res.cached) {
+        // ignore: discarded_futures
+        context.read<AiQuotaProvider>().refresh();
+      }
+      if (!res.usedAi || res.polished.trim() == original) {
+        AppSnackbar.success(
+          context,
+          'Your description already reads well — nothing to change.',
+        );
+        return;
+      }
+      final accepted = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: context.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => _PolishedJdSheet(
+          original: original,
+          polished: res.polished,
+          changes: res.changes,
+        ),
+      );
+      if (accepted == true && mounted) {
+        setState(() => _description.text = res.polished);
+        AppSnackbar.success(context, 'Description replaced with the polished version.');
+      }
+    } catch (e) {
+      if (mounted) AppSnackbar.error(context, 'Polish failed: $e');
+    }
+  }
+
+  /// Pull AI-suggested screening questions for the current draft. The
+  /// hirer reviews + selects which to keep — we don't auto-fill so a
+  /// rushed click never silently bloats the listing with 5 questions.
+  /// Cap stays at 5 total: existing custom rows count toward the limit.
+  Future<void> _generateScreeningQuestions() async {
+    final title = _title.text.trim();
+    final description = _description.text.trim();
+    if (title.length < 3 || description.length < 20) {
+      AppSnackbar.error(
+        context,
+        'Add a title and at least a short description first.',
+      );
+      return;
+    }
+    final remaining = 5 - _screeningQuestions.length;
+    if (remaining <= 0) return;
+
+    setState(() {});
+    try {
+      final res = await HirerJobService.instance.generateScreeningQuestions(
+        title: title,
+        description: description,
+        skills: _skills.toList(),
+      );
+      if (!mounted) return;
+      // Keep the quota banner in sync — the helper doesn't expose the
+      // post-call snapshot directly, so kick a refresh on cache miss.
+      if (!res.cached) {
+        // ignore: discarded_futures
+        context.read<AiQuotaProvider>().refresh();
+      }
+      if (res.questions.isEmpty) {
+        AppSnackbar.error(context, 'No suggestions generated.');
+        return;
+      }
+      final picked = await showModalBottomSheet<List<ScreeningQuestion>>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: context.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => _GeneratedScreeningSheet(
+          candidates: res.questions
+              .map((m) => ScreeningQuestion.fromJson(m))
+              .toList(),
+          maxPick: remaining,
+        ),
+      );
+      if (picked == null || picked.isEmpty || !mounted) return;
+      setState(() => _screeningQuestions.addAll(picked.take(remaining)));
+    } catch (e) {
+      if (mounted) {
+        AppSnackbar.error(context, 'Could not generate questions: $e');
+      }
+    }
+  }
+}
+
+/// Bottom sheet that lets the hirer review AI-suggested screening
+/// questions and pick which ones to add to the draft. Selection is
+/// capped by [maxPick] so the parent never overflows the 5-question
+/// hard cap on the listing.
+class _GeneratedScreeningSheet extends StatefulWidget {
+  final List<ScreeningQuestion> candidates;
+  final int maxPick;
+  const _GeneratedScreeningSheet({
+    required this.candidates,
+    required this.maxPick,
+  });
+
+  @override
+  State<_GeneratedScreeningSheet> createState() =>
+      _GeneratedScreeningSheetState();
+}
+
+class _GeneratedScreeningSheetState extends State<_GeneratedScreeningSheet> {
+  late final Set<int> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = <int>{
+      for (var i = 0;
+          i < widget.candidates.length && i < widget.maxPick;
+          i++)
+        i,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                color: context.cardBorder,
+                borderRadius: BorderRadius.circular(50),
+              ),
+            ),
+          ),
+          AppText.h4('AI suggested questions'),
+          const SizedBox(height: 4),
+          AppText.caption(
+            'Tap to keep / drop. You can edit each one after adding.',
+          ),
+          const SizedBox(height: 12),
+          for (int i = 0; i < widget.candidates.length; i++)
+            _buildCandidate(context, i, widget.candidates[i]),
+          const SizedBox(height: 12),
+          PrimaryButton(
+            label: _selected.isEmpty
+                ? 'Pick at least one'
+                : 'Add ${_selected.length} question${_selected.length == 1 ? '' : 's'}',
+            onPressed: _selected.isEmpty
+                ? null
+                : () => Navigator.of(context).pop(
+                      _selected
+                          .toList()
+                          .map((i) => widget.candidates[i])
+                          .toList(),
+                    ),
+          ),
+          const SizedBox(height: 4),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCandidate(BuildContext context, int i, ScreeningQuestion q) {
+    final selected = _selected.contains(i);
+    final canAddMore = _selected.length < widget.maxPick;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          setState(() {
+            if (selected) {
+              _selected.remove(i);
+            } else if (canAddMore) {
+              _selected.add(i);
+            }
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.06)
+                : context.surfaceVariant,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.40)
+                  : context.cardBorder,
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                selected
+                    ? Icons.check_box
+                    : Icons.check_box_outline_blank,
+                size: 20,
+                color: selected ? AppColors.primary : context.textTertiary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AppText.body(q.question, fontWeight: FontWeight.w600),
+                    const SizedBox(height: 4),
+                    AppText.caption(
+                      [
+                        q.type,
+                        if (q.options.isNotEmpty)
+                          '${q.options.length} options',
+                        if (q.isRequired) 'required',
+                      ].join(' · '),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _StepDots extends StatelessWidget {
@@ -852,6 +1135,149 @@ class _ScreeningQuestionDialogState extends State<_ScreeningQuestionDialog> {
           child: const Text('Add'),
         ),
       ],
+    );
+  }
+}
+
+/// Side-by-side preview of the original JD vs the AI-polished version.
+/// Hirer accepts (replaces the field) or dismisses (keeps the original).
+/// Lists the changes the model applied so the hirer knows WHAT moved
+/// before they accept.
+class _PolishedJdSheet extends StatelessWidget {
+  final String original;
+  final String polished;
+  final List<String> changes;
+  const _PolishedJdSheet({
+    required this.original,
+    required this.polished,
+    required this.changes,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.85,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: context.cardBorder,
+                  borderRadius: BorderRadius.circular(50),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                const Icon(Icons.auto_awesome,
+                    size: 18, color: AppColors.primary),
+                const SizedBox(width: 8),
+                AppText.h4('Polished description'),
+              ],
+            ),
+            if (changes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              AppText.label('Changes applied'),
+              const SizedBox(height: 4),
+              for (final c in changes)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6, right: 8),
+                        child: Container(
+                          width: 5,
+                          height: 5,
+                          decoration: const BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: AppText.body(c),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            const SizedBox(height: 12),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AppText.label('Polished version'),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.20),
+                        ),
+                      ),
+                      child: SelectableText(
+                        polished,
+                        style: AppTextStyles.bodyMedium.copyWith(
+                          color: context.textPrimary,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    AppText.label('Original (will be replaced)'),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: context.surfaceVariant,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: SelectableText(
+                        original,
+                        style: AppTextStyles.bodySmall.copyWith(
+                          color: context.textSecondary,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: PrimaryButton(
+                    label: 'Replace with polished',
+                    icon: Icons.check_rounded,
+                    onPressed: () => Navigator.of(context).pop(true),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Keep original'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

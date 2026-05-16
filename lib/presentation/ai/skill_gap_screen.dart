@@ -11,6 +11,7 @@ import '../../data/services/ai_service.dart';
 import '../../providers/auth_provider.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
+import 'widgets/skill_extract_sheet.dart';
 
 class SkillGapScreen extends StatefulWidget {
   const SkillGapScreen({super.key});
@@ -169,6 +170,36 @@ class _SkillGapScreenState extends State<SkillGapScreen>
     );
   }
 
+  /// Open the skill-extract sheet, then bulk-adopt every skill the user
+  /// kept selected. We fan into the same `_adoptSkill` codepath so the
+  /// chip-state machine on this screen stays consistent (avoids double
+  /// PATCHes if the user already adopted some of the returned skills).
+  Future<void> _extractFromJd() async {
+    final picked = await SkillExtractSheet.show(
+      context,
+      title: 'Pull skills from a JD',
+      hint:
+          'Paste a job description below. We will extract the required '
+          'skills and add the ones you keep selected to your profile.',
+    );
+    if (picked == null || picked.isEmpty || !mounted) return;
+    int added = 0;
+    for (final skill in picked) {
+      // _adoptSkill already de-dupes against existing + in-flight sets,
+      // so re-running is safe and idempotent.
+      final before = _adoptedSkills.length;
+      await _adoptSkill(skill);
+      if (!mounted) return;
+      if (_adoptedSkills.length > before) added += 1;
+    }
+    if (mounted && added > 0) {
+      AppSnackbar.success(
+        context,
+        'Added $added skill${added == 1 ? '' : 's'} to your profile',
+      );
+    }
+  }
+
   Widget _searchCard() => Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -192,6 +223,18 @@ class _SkillGapScreenState extends State<SkillGapScreen>
               label: 'Analyse my gaps',
               icon: Icons.auto_awesome,
               onPressed: _go,
+            ),
+            const SizedBox(height: 10),
+            // Secondary path — paste a JD to harvest skills in bulk.
+            // Kept as a low-emphasis text button so the primary "Analyse
+            // my gaps" CTA doesn't lose its anchor on the card.
+            TextButton.icon(
+              onPressed: _extractFromJd,
+              icon: const Icon(Icons.content_paste_search, size: 18),
+              label: const Text('Or paste a JD to extract skills'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+              ),
             ),
           ],
         ),

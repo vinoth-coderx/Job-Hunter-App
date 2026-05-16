@@ -3,7 +3,9 @@ import 'package:provider/provider.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/app_snackbar.dart';
 import '../../data/models/alert_model.dart';
+import '../../data/services/alert_service.dart';
 import '../../providers/alert_provider.dart';
 import '../widgets/animated_list_item.dart';
 import '../widgets/confirm_dialog.dart';
@@ -91,6 +93,14 @@ class _AlertsScreenState extends State<AlertsScreen> {
           color: context.textPrimary,
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Create alert',
+            icon: const Icon(Icons.add_rounded),
+            color: AppColors.primary,
+            onPressed: () => _CreateAlertSheet.show(context),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: () => provider.load(),
@@ -311,4 +321,262 @@ class AlertSearchArgs {
     this.location,
     required this.sort,
   });
+}
+
+/// Create-alert sheet. Composer for label + query + location. Surfaces
+/// AI-suggested labels under the label field — tap a chip to pre-fill.
+/// Backend caches name suggestions 7d so re-asking on the same filter
+/// combo is free.
+class _CreateAlertSheet extends StatefulWidget {
+  const _CreateAlertSheet();
+
+  static Future<void> show(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => const _CreateAlertSheet(),
+    );
+  }
+
+  @override
+  State<_CreateAlertSheet> createState() => _CreateAlertSheetState();
+}
+
+class _CreateAlertSheetState extends State<_CreateAlertSheet> {
+  final _label = TextEditingController();
+  final _query = TextEditingController();
+  final _location = TextEditingController();
+  List<String> _suggestions = const [];
+  bool _suggestLoading = false;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _label.dispose();
+    _query.dispose();
+    _location.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchSuggestions() async {
+    final q = _query.text.trim();
+    final loc = _location.text.trim();
+    if (q.isEmpty && loc.isEmpty) {
+      setState(() => _suggestions = const []);
+      return;
+    }
+    setState(() => _suggestLoading = true);
+    try {
+      final names = await AlertService().suggestNames(
+        query: q,
+        location: loc.isEmpty ? null : loc,
+      );
+      if (!mounted) return;
+      setState(() {
+        _suggestions = names;
+        _suggestLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _suggestions = const [];
+        _suggestLoading = false;
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final q = _query.text.trim();
+    if (q.isEmpty) {
+      setState(() => _error = 'Enter what to search for.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final created = await context.read<AlertProvider>().create(
+            label: _label.text.trim().isEmpty ? null : _label.text.trim(),
+            query: q,
+            location: _location.text.trim().isEmpty
+                ? null
+                : _location.text.trim(),
+          );
+      if (!mounted) return;
+      if (created == null) {
+        setState(() {
+          _saving = false;
+          _error = 'Could not create alert.';
+        });
+        return;
+      }
+      Navigator.of(context).pop();
+      AppSnackbar.success(context, 'Alert created.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + viewInsets),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                color: context.cardBorder,
+                borderRadius: BorderRadius.circular(50),
+              ),
+            ),
+          ),
+          Text(
+            'Create alert',
+            style: AppTextStyles.h4
+                .copyWith(color: context.textPrimary, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _query,
+            decoration: const InputDecoration(
+              labelText: 'Search query',
+              hintText: 'e.g. React developer',
+            ),
+            onChanged: (_) {
+              // Debounce-free: AI call is cheap + cached. We just want
+              // fresh suggestions when the user pauses typing.
+              _suggestions = const [];
+              setState(() {});
+            },
+            onEditingComplete: _fetchSuggestions,
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _location,
+            decoration: const InputDecoration(
+              labelText: 'Location (optional)',
+              hintText: 'e.g. Bangalore',
+            ),
+            onEditingComplete: _fetchSuggestions,
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _label,
+            decoration: const InputDecoration(
+              labelText: 'Alert name (optional)',
+              hintText: 'Tap a suggestion below or type your own',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome,
+                  size: 14, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                'Suggested names',
+                style: AppTextStyles.labelSmall.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _suggestLoading ? null : _fetchSuggestions,
+                icon: _suggestLoading
+                    ? const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 14),
+                label: const Text('Suggest'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
+          ),
+          if (_suggestions.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final s in _suggestions)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(50),
+                    onTap: () => setState(() => _label.text = s),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(50),
+                        border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: Text(
+                        s,
+                        style: AppTextStyles.labelSmall.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: AppTextStyles.bodySmall.copyWith(color: AppColors.urgent),
+            ),
+          ],
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  )
+                : const Icon(Icons.bookmark_add_outlined, size: 18),
+            label: const Text('Create alert'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
